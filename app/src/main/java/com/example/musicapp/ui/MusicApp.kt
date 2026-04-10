@@ -39,6 +39,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
@@ -75,6 +76,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.musicapp.domain.model.Playlist
 import com.example.musicapp.domain.model.Song
+import com.example.musicapp.domain.model.DriveFolder
 import com.example.musicapp.ui.home.HomeViewModel
 import com.example.musicapp.ui.library.LibraryViewModel
 import com.example.musicapp.ui.player.PlayerViewModel
@@ -195,6 +197,11 @@ fun MusicApp(
                             state = state,
                             onConnectDrive = { activity?.let(viewModel::connectDrive) },
                             onDisconnectDrive = { activity?.let(viewModel::disconnectDrive) },
+                            onChooseFolder = viewModel::openFolderPicker,
+                            onNavigateUpFolder = viewModel::navigateUpDriveFolders,
+                            onDismissFolderPicker = viewModel::dismissFolderPicker,
+                            onOpenFolder = viewModel::navigateIntoDriveFolder,
+                            onSelectCurrentFolder = viewModel::selectCurrentDriveFolder,
                             onRefresh = viewModel::refreshLibraries,
                         )
                     }
@@ -672,6 +679,11 @@ private fun SettingsScreen(
     state: com.example.musicapp.ui.settings.SettingsUiState,
     onConnectDrive: () -> Unit,
     onDisconnectDrive: () -> Unit,
+    onChooseFolder: () -> Unit,
+    onNavigateUpFolder: () -> Unit,
+    onDismissFolderPicker: () -> Unit,
+    onOpenFolder: (DriveFolder) -> Unit,
+    onSelectCurrentFolder: () -> Unit,
     onRefresh: () -> Unit,
 ) {
     Column(
@@ -694,7 +706,7 @@ private fun SettingsScreen(
             ) {
                 Box(
                     modifier = Modifier
-                        .size(42.dp)
+                        .size(38.dp)
                         .clip(CircleShape)
                         .background(if (state.isDriveConnected) SpotifyGreen.copy(alpha = 0.18f) else SpotifyMuted),
                     contentAlignment = Alignment.Center,
@@ -760,7 +772,7 @@ private fun SettingsScreen(
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
                         onClick = if (state.isDriveConnected) onDisconnectDrive else onConnectDrive,
                         enabled = !state.isWorking,
@@ -772,14 +784,14 @@ private fun SettingsScreen(
                         Text(if (state.isWorking) "Working..." else if (state.isDriveConnected) "Disconnect" else "Connect Google Drive")
                     }
                     Button(
-                        onClick = onRefresh,
-                        enabled = !state.isWorking,
+                        onClick = onChooseFolder,
+                        enabled = state.isDriveConnected && !state.isWorking && !state.isFolderLoading,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = SpotifyMuted.copy(alpha = 0.35f),
                             contentColor = SpotifyWhite,
                         ),
                     ) {
-                        Text("Refresh")
+                        Text(if (state.isFolderLoading) "Loading..." else "Browse")
                     }
                 }
             }
@@ -795,9 +807,45 @@ private fun SettingsScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text("Selected root", color = SpotifyWhite, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text(
+                        state.connectedDriveFolderName,
+                        color = SpotifyTextMuted,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Button(
+                    onClick = onRefresh,
+                    enabled = !state.isWorking && !state.isFolderLoading,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = SpotifyGreen,
+                        contentColor = SpotifyBackground,
+                    ),
+                ) {
+                    Text("Sync")
+                }
+            }
+        }
+        Card(
+            colors = CardDefaults.cardColors(containerColor = SpotifyCard),
+            shape = RoundedCornerShape(18.dp),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text("Library sync", color = SpotifyWhite, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Text("Selected folders", color = SpotifyTextMuted, style = MaterialTheme.typography.bodySmall)
+                    Text("Imported roots", color = SpotifyWhite, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text("Drive roots tracked by the app", color = SpotifyTextMuted, style = MaterialTheme.typography.bodySmall)
                 }
                 Text(
                     text = state.selectedFolderCount.toString(),
@@ -807,6 +855,117 @@ private fun SettingsScreen(
                 )
             }
         }
+    }
+
+    if (state.isFolderPickerVisible) {
+        AlertDialog(
+            onDismissRequest = onDismissFolderPicker,
+            containerColor = SpotifyCard,
+            title = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Choose Drive Folder", color = SpotifyWhite, fontWeight = FontWeight.Bold)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            state.currentDriveFolderPath,
+                            modifier = Modifier.weight(1f),
+                            color = SpotifyTextMuted,
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        if (state.canNavigateUpFolders) {
+                            Text(
+                                "Back",
+                                modifier = Modifier.clickable(enabled = !state.isFolderLoading, onClick = onNavigateUpFolder),
+                                color = SpotifyWhite,
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                    }
+                }
+            },
+            text = {
+                if (state.isFolderLoading && state.availableDriveFolders.isEmpty()) {
+                    Text(
+                        "Loading folders...",
+                        color = SpotifyTextMuted,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                } else if (state.availableDriveFolders.isEmpty()) {
+                    Text(
+                        "This folder has no subfolders. You can use the current folder.",
+                        color = SpotifyTextMuted,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                } else {
+                    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(state.availableDriveFolders) { folder ->
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable(enabled = !state.isFolderLoading) { onOpenFolder(folder) },
+                                colors = CardDefaults.cardColors(containerColor = SpotifyBackground),
+                                shape = RoundedCornerShape(12.dp),
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Column(
+                                        modifier = Modifier.weight(1f),
+                                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                                    ) {
+                                        Text(folder.name, color = SpotifyWhite, fontWeight = FontWeight.SemiBold)
+                                        Text(
+                                            folder.path,
+                                            color = SpotifyTextMuted,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                    Text(
+                                        "Open",
+                                        color = SpotifyWhite,
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.Bold,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = onSelectCurrentFolder,
+                    enabled = !state.isFolderLoading,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = SpotifyGreen,
+                        contentColor = SpotifyBackground,
+                    ),
+                ) {
+                    Text("Use This Folder")
+                }
+            },
+            dismissButton = {
+                Button(
+                    onClick = onDismissFolderPicker,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = SpotifyMuted.copy(alpha = 0.35f),
+                        contentColor = SpotifyWhite,
+                    ),
+                ) {
+                    Text("Close")
+                }
+            },
+        )
     }
 }
 

@@ -3,13 +3,15 @@ package com.example.musicapp.data.di
 import com.example.musicapp.core.DefaultDispatchersProvider
 import com.example.musicapp.core.DispatchersProvider
 import com.example.musicapp.data.drive.DriveMusicDataSource
-import com.example.musicapp.data.drive.StubDriveMusicDataSource
+import com.example.musicapp.data.drive.GoogleDriveMusicDataSource
 import com.example.musicapp.data.local.LocalMusicDataSource
 import com.example.musicapp.data.local.MediaStoreLocalMusicDataSource
+import com.example.musicapp.data.repository.DefaultDriveRepository
 import com.example.musicapp.data.repository.DefaultFavoritesRepository
 import com.example.musicapp.data.repository.DefaultMusicRepository
 import com.example.musicapp.data.repository.DefaultPlaylistRepository
 import com.example.musicapp.data.repository.DefaultSettingsRepository
+import com.example.musicapp.domain.repository.DriveRepository
 import com.example.musicapp.domain.repository.FavoritesRepository
 import com.example.musicapp.domain.repository.MusicRepository
 import com.example.musicapp.domain.repository.PlaylistRepository
@@ -32,8 +34,13 @@ abstract class DataBindingsModule {
 
     @Binds
     abstract fun bindDriveMusicDataSource(
-        implementation: StubDriveMusicDataSource,
+        implementation: GoogleDriveMusicDataSource,
     ): DriveMusicDataSource
+
+    @Binds
+    abstract fun bindDriveRepository(
+        implementation: DefaultDriveRepository,
+    ): DriveRepository
 
     @Binds
     abstract fun bindMusicRepository(
@@ -64,4 +71,3 @@ object DataModule {
     @Singleton
     fun provideDispatchersProvider(): DispatchersProvider = DefaultDispatchersProvider
 }
-

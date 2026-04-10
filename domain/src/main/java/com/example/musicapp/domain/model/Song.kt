@@ -17,5 +17,5 @@ data class Song(
     val mimeType: String? = null,
     val isFavorite: Boolean = false,
     val addedAtEpochMillis: Long = 0L,
+    val authAccountEmail: String? = null,
 )
-

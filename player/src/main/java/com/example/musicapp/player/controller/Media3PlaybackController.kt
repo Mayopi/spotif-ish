@@ -3,7 +3,11 @@ package com.example.musicapp.player.controller
 import android.content.Context
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.ExoPlayer
+import com.example.musicapp.core.DriveAuthSessionStore
 import com.example.musicapp.domain.model.PlaybackQueue
 import com.example.musicapp.domain.model.RepeatMode
 import com.example.musicapp.domain.model.Song
@@ -18,22 +22,24 @@ import kotlinx.coroutines.flow.asStateFlow
 @Singleton
 class Media3PlaybackController @Inject constructor(
     @ApplicationContext context: Context,
+    private val driveAuthSessionStore: DriveAuthSessionStore,
 ) : PlaybackController {
 
-    private val exoPlayer = ExoPlayer.Builder(context).build()
+    private val appContext = context
+    private var exoPlayer = ExoPlayer.Builder(context).build()
     private val state = MutableStateFlow(PlaybackState())
     private var currentQueue = emptyList<Song>()
+    private val playerListener =
+        object : Player.Listener {
+            override fun onIsPlayingChanged(isPlaying: Boolean) = publishState()
+
+            override fun onPlaybackStateChanged(playbackState: Int) = publishState()
+
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) = publishState()
+        }
 
     init {
-        exoPlayer.addListener(
-            object : Player.Listener {
-                override fun onIsPlayingChanged(isPlaying: Boolean) = publishState()
-
-                override fun onPlaybackStateChanged(playbackState: Int) = publishState()
-
-                override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) = publishState()
-            },
-        )
+        exoPlayer.addListener(playerListener)
     }
 
     override fun observeState() = state.asStateFlow()
@@ -41,6 +47,7 @@ class Media3PlaybackController @Inject constructor(
     override suspend fun play(song: Song, queue: List<Song>) {
         currentQueue = queue
         val startIndex = queue.indexOfFirst { it.id == song.id }.coerceAtLeast(0)
+        configureDataSource(queue)
         exoPlayer.setMediaItems(queue.map(::toMediaItem), startIndex, 0L)
         exoPlayer.prepare()
         exoPlayer.playWhenReady = true
@@ -105,5 +112,23 @@ class Media3PlaybackController @Inject constructor(
                     .build(),
             )
             .build()
+    }
+
+    private suspend fun configureDataSource(queue: List<Song>) {
+        val driveSong = queue.firstOrNull { it.authAccountEmail != null }
+        val token = driveAuthSessionStore.tokenFor(driveSong?.authAccountEmail)
+        val mediaSourceFactory = if (token != null) {
+            val httpFactory = DefaultHttpDataSource.Factory()
+                .setDefaultRequestProperties(mapOf("Authorization" to "Bearer $token"))
+            DefaultMediaSourceFactory(DefaultDataSource.Factory(appContext, httpFactory))
+        } else {
+            DefaultMediaSourceFactory(appContext)
+        }
+        val currentPlayer = exoPlayer
+        currentPlayer.removeListener(playerListener)
+        currentPlayer.release()
+        exoPlayer = ExoPlayer.Builder(appContext)
+            .setMediaSourceFactory(mediaSourceFactory)
+            .build().also { it.addListener(playerListener) }
     }
 }

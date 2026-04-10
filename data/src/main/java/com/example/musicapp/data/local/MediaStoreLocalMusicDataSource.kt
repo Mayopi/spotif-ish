@@ -55,6 +55,7 @@ class MediaStoreLocalMusicDataSource @Inject constructor(
                     playableUri = contentUri.toString(),
                     mimeType = cursor.getString(mimeTypeColumn),
                     addedAtEpochMillis = cursor.getLong(dateAddedColumn) * 1000L,
+                    authAccountEmail = null,
                 )
             }
         }
@@ -62,4 +63,3 @@ class MediaStoreLocalMusicDataSource @Inject constructor(
         return songs
     }
 }
-

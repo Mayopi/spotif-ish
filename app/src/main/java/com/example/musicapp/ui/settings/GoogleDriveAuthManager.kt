@@ -8,6 +8,7 @@ import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import com.example.musicapp.BuildConfig
+import com.example.musicapp.debug.DriveDebugLogger
 import com.google.android.gms.auth.api.identity.AuthorizationRequest
 import com.google.android.gms.auth.api.identity.Identity
 import com.google.android.gms.common.api.Scope
@@ -25,6 +26,7 @@ data class DriveAccountProfile(
 sealed interface DriveConnectResult {
     data class Authorized(
         val account: DriveAccountProfile,
+        val accessToken: String?,
     ) : DriveConnectResult
 
     data class RequiresResolution(
@@ -34,13 +36,16 @@ sealed interface DriveConnectResult {
 }
 
 @ActivityRetainedScoped
-class GoogleDriveAuthManager @Inject constructor() {
+class GoogleDriveAuthManager @Inject constructor(
+    private val driveDebugLogger: DriveDebugLogger,
+) {
 
     suspend fun beginConnection(activity: Activity): DriveConnectResult {
         val clientId = BuildConfig.GOOGLE_WEB_CLIENT_ID
         check(clientId.isNotBlank()) {
             "Missing GOOGLE_WEB_CLIENT_ID. Add it to the project's .env file."
         }
+        driveDebugLogger.log("begin_connection", "Starting Google credential flow")
 
         val credentialManager = CredentialManager.create(activity)
         val signInOption = GetSignInWithGoogleOption.Builder(clientId).build()
@@ -61,6 +66,7 @@ class GoogleDriveAuthManager @Inject constructor() {
                 ?: googleCredential.id.substringBefore("@"),
             email = googleCredential.id,
         )
+        driveDebugLogger.log("credential_result", "Received Google credential for ${account.email}")
 
         val authorizationRequest = AuthorizationRequest.builder()
             .setRequestedScopes(
@@ -75,21 +81,31 @@ class GoogleDriveAuthManager @Inject constructor() {
             .await()
 
         return if (authorizationResult.hasResolution()) {
+            driveDebugLogger.log("authorization_resolution", "Authorization requires resolution for ${account.email}")
             DriveConnectResult.RequiresResolution(
                 pendingIntent = authorizationResult.pendingIntent
                     ?: error("Authorization requires resolution but no PendingIntent was returned."),
                 account = account,
             )
         } else {
-            DriveConnectResult.Authorized(account)
+            driveDebugLogger.log(
+                "authorization_complete",
+                "Authorization completed immediately for ${account.email}, tokenPresent=${!authorizationResult.accessToken.isNullOrBlank()}",
+            )
+            DriveConnectResult.Authorized(account, authorizationResult.accessToken)
         }
     }
 
-    fun completeConnection(activity: Activity, resultData: Intent?) {
-        Identity.getAuthorizationClient(activity).getAuthorizationResultFromIntent(resultData)
+    fun completeConnection(activity: Activity, resultData: Intent?): String? {
+        driveDebugLogger.log("authorization_callback", "Handling Google authorization callback")
+        val result = Identity.getAuthorizationClient(activity).getAuthorizationResultFromIntent(resultData)
+        driveDebugLogger.log("authorization_callback_complete", "Callback resolved, tokenPresent=${!result.accessToken.isNullOrBlank()}")
+        return result.accessToken
     }
 
     suspend fun clearSession(activity: Activity) {
+        driveDebugLogger.log("clear_session", "Clearing Credential Manager session state")
         CredentialManager.create(activity).clearCredentialState(ClearCredentialStateRequest())
+        driveDebugLogger.log("clear_session_complete", "Credential Manager session cleared")
     }
 }
