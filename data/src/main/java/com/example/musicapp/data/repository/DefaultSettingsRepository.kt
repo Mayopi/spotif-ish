@@ -60,6 +60,7 @@ class DefaultSettingsRepository @Inject constructor(
             .put("provider", connection.provider)
             .put("folderId", connection.folderId)
             .put("folderName", connection.folderName)
+            .put("accountEmail", connection.accountEmail)
             .put("active", connection.active)
             .toString()
     }
@@ -70,6 +71,7 @@ class DefaultSettingsRepository @Inject constructor(
             provider = json.getString("provider"),
             folderId = json.getString("folderId"),
             folderName = json.getString("folderName"),
+            accountEmail = json.optString("accountEmail").takeIf { it.isNotBlank() },
             active = json.getBoolean("active"),
         )
     }
@@ -80,4 +82,3 @@ class DefaultSettingsRepository @Inject constructor(
         val DRIVE_FOLDER = stringPreferencesKey("drive_folder")
     }
 }
-

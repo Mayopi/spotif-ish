@@ -1,5 +1,10 @@
 package com.example.musicapp.ui
 
+import android.app.Activity
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -46,6 +51,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
@@ -55,6 +61,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -72,6 +79,7 @@ import com.example.musicapp.ui.home.HomeViewModel
 import com.example.musicapp.ui.library.LibraryViewModel
 import com.example.musicapp.ui.player.PlayerViewModel
 import com.example.musicapp.ui.search.SearchViewModel
+import com.example.musicapp.ui.settings.SettingsEvent
 import com.example.musicapp.ui.settings.SettingsViewModel
 
 private enum class TopLevelDestination(
@@ -158,9 +166,35 @@ fun MusicApp(
                     }
                     composable(TopLevelDestination.SETTINGS.route) {
                         val viewModel = hiltViewModel<SettingsViewModel>()
-                        val state by viewModel.uiState.collectAsStateWithLifecycle()
+                        val state by viewModel.screenState.collectAsStateWithLifecycle()
+                        val context = LocalContext.current
+                        val activity = context.findActivity()
+                        val authorizationLauncher = rememberLauncherForActivityResult(
+                            contract = ActivityResultContracts.StartIntentSenderForResult(),
+                        ) { result ->
+                            if (activity != null) {
+                                viewModel.completeDriveAuthorization(activity, result.data)
+                            }
+                        }
+                        LaunchedEffect(viewModel.events, context, activity) {
+                            viewModel.events.collect { event ->
+                                when (event) {
+                                    is SettingsEvent.LaunchDriveAuthorization -> {
+                                        authorizationLauncher.launch(
+                                            IntentSenderRequest.Builder(event.pendingIntent.intentSender).build(),
+                                        )
+                                    }
+
+                                    is SettingsEvent.Message -> {
+                                        Toast.makeText(context, event.text, Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
+                        }
                         SettingsScreen(
                             state = state,
+                            onConnectDrive = { activity?.let(viewModel::connectDrive) },
+                            onDisconnectDrive = { activity?.let(viewModel::disconnectDrive) },
                             onRefresh = viewModel::refreshLibraries,
                         )
                     }
@@ -636,26 +670,143 @@ private fun PlayerScreen(
 @Composable
 private fun SettingsScreen(
     state: com.example.musicapp.ui.settings.SettingsUiState,
+    onConnectDrive: () -> Unit,
+    onDisconnectDrive: () -> Unit,
     onRefresh: () -> Unit,
 ) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("Settings", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.ExtraBold, color = SpotifyWhite)
-        Button(
-            onClick = onRefresh,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = SpotifyGreen,
-                contentColor = SpotifyBackground,
-            ),
+        Text("Profile", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.ExtraBold, color = SpotifyWhite)
+        Card(
+            colors = CardDefaults.cardColors(containerColor = SpotifyCard),
+            shape = RoundedCornerShape(18.dp),
         ) {
-            Text("Refresh libraries")
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(42.dp)
+                        .clip(CircleShape)
+                        .background(if (state.isDriveConnected) SpotifyGreen.copy(alpha = 0.18f) else SpotifyMuted),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = if (state.isDriveConnected) state.connectedDriveName.take(1).uppercase() else "G",
+                        color = SpotifyWhite,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(
+                        text = if (state.isDriveConnected) state.connectedDriveName else "Google Drive",
+                        color = SpotifyWhite,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                        text = if (state.connectedDriveEmail.isNotBlank()) state.connectedDriveEmail else "Connect your Google account to import Drive audio.",
+                        color = SpotifyTextMuted,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(if (state.isDriveConnected) SpotifyGreen.copy(alpha = 0.18f) else SpotifyMuted.copy(alpha = 0.35f))
+                        .padding(horizontal = 10.dp, vertical = 5.dp),
+                ) {
+                    Text(
+                        text = if (state.isDriveConnected) "Connected" else "Offline",
+                        color = if (state.isDriveConnected) SpotifyGreen else SpotifyTextMuted,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
         }
-        Text("Connected Drive: ${state.connectedDriveFolderName}", color = SpotifyTextMuted)
-        Text("Selected folders: ${state.selectedFolderCount}", color = SpotifyTextMuted)
+        Card(
+            colors = CardDefaults.cardColors(containerColor = SpotifyCard),
+            shape = RoundedCornerShape(18.dp),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Drive access", color = SpotifyWhite, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text(
+                        text = if (state.isDriveConnected) {
+                            "Your Google account is linked and ready for Drive sync."
+                        } else {
+                            "Sign in with Google and grant Drive access to connect your account."
+                        },
+                        color = SpotifyTextMuted,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(
+                        onClick = if (state.isDriveConnected) onDisconnectDrive else onConnectDrive,
+                        enabled = !state.isWorking,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (state.isDriveConnected) SpotifyCard else SpotifyGreen,
+                            contentColor = if (state.isDriveConnected) SpotifyWhite else SpotifyBackground,
+                        ),
+                    ) {
+                        Text(if (state.isWorking) "Working..." else if (state.isDriveConnected) "Disconnect" else "Connect Google Drive")
+                    }
+                    Button(
+                        onClick = onRefresh,
+                        enabled = !state.isWorking,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = SpotifyMuted.copy(alpha = 0.35f),
+                            contentColor = SpotifyWhite,
+                        ),
+                    ) {
+                        Text("Refresh")
+                    }
+                }
+            }
+        }
+        Card(
+            colors = CardDefaults.cardColors(containerColor = SpotifyCard),
+            shape = RoundedCornerShape(18.dp),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text("Library sync", color = SpotifyWhite, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text("Selected folders", color = SpotifyTextMuted, style = MaterialTheme.typography.bodySmall)
+                }
+                Text(
+                    text = state.selectedFolderCount.toString(),
+                    color = SpotifyWhite,
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.ExtraBold,
+                )
+            }
+        }
     }
 }
 
@@ -729,4 +880,10 @@ private fun PlaylistRow(playlist: Playlist) {
             Text("${playlist.songIds.size} songs", style = MaterialTheme.typography.bodyMedium, color = SpotifyTextMuted)
         }
     }
+}
+
+private tailrec fun android.content.Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is android.content.ContextWrapper -> baseContext.findActivity()
+    else -> null
 }
