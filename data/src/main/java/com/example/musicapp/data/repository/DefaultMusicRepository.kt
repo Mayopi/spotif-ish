@@ -68,44 +68,61 @@ class DefaultMusicRepository @Inject constructor(
     }
 
     override suspend fun refreshDriveLibrary() {
-        val previousCount = driveSyncState.value.lastSyncedSongCount
-        val songs = withContext(dispatchersProvider.io) {
-            driveMusicDataSource.fetchSongs { processedCount ->
-                driveSyncState.value = DriveSyncState(
-                    isSyncing = true,
-                    lastError = null,
-                    lastSyncedSongCount = previousCount,
-                    processedFileCount = processedCount,
-                )
-            }
+        // Reset the Drive library at the start of a sync so stale entries from a
+        // previous folder selection are cleared. Songs are appended incrementally as
+        // they are discovered below, so the UI updates in real time.
+        driveSongs.value = emptyList()
+        driveSyncState.value = DriveSyncState(
+            isSyncing = true,
+            lastError = null,
+            lastSyncedSongCount = 0,
+            processedFileCount = 0,
+        )
+
+        val finalSongs = withContext(dispatchersProvider.io) {
+            driveMusicDataSource.fetchSongs(
+                onSongDiscovered = { song ->
+                    // Append the freshly discovered song and push an updated state so the
+                    // home/library/search screens render it immediately instead of waiting
+                    // for the whole scan to finish.
+                    val updated = driveSongs.value + song
+                    driveSongs.value = updated
+                    driveSyncState.value = DriveSyncState(
+                        isSyncing = true,
+                        lastError = null,
+                        lastSyncedSongCount = updated.size,
+                        processedFileCount = updated.size,
+                    )
+                },
+                onProgress = null,
+            )
         }
-        driveSongs.value = songs
+
+        // Replace with the final, deterministic ordering once the scan finishes so the
+        // user sees a stable list after the live stream settles.
+        driveSongs.value = finalSongs
         driveSyncState.value = DriveSyncState(
             isSyncing = false,
             lastError = null,
-            lastSyncedSongCount = songs.size,
-            processedFileCount = songs.size,
+            lastSyncedSongCount = finalSongs.size,
+            processedFileCount = finalSongs.size,
         )
     }
 
     override fun enqueueDriveLibraryRefresh() {
         if (driveRefreshJob?.isActive == true) return
         driveRefreshJob = scope.launch {
-            val previousCount = driveSyncState.value.lastSyncedSongCount
-            driveSyncState.value = DriveSyncState(
-                isSyncing = true,
-                lastError = null,
-                lastSyncedSongCount = previousCount,
-                processedFileCount = 0,
-            )
             runCatching {
                 refreshDriveLibrary()
             }.onFailure { throwable ->
+                // Keep whatever songs were already streamed in so the UI still shows them
+                // even though the overall sync failed partway through.
+                val partialCount = driveSongs.value.size
                 driveSyncState.value = DriveSyncState(
                     isSyncing = false,
                     lastError = throwable.message ?: "Drive sync failed.",
-                    lastSyncedSongCount = previousCount,
-                    processedFileCount = driveSyncState.value.processedFileCount,
+                    lastSyncedSongCount = partialCount,
+                    processedFileCount = partialCount,
                 )
             }
         }

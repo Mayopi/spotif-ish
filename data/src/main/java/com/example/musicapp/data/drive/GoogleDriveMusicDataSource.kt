@@ -35,23 +35,30 @@ class GoogleDriveMusicDataSource @Inject constructor(
         }
     }
 
-    override suspend fun fetchSongs(onProgress: ((processedFileCount: Int) -> Unit)?): List<Song> {
+    override suspend fun fetchSongs(
+        onSongDiscovered: (suspend (Song) -> Unit)?,
+        onProgress: ((processedFileCount: Int) -> Unit)?,
+    ): List<Song> {
         return withContext(Dispatchers.IO) {
             val settings = settingsRepository.observeSettings().first()
             val connection = settings.connectedDriveFolder ?: return@withContext emptyList()
             val accountEmail = connection.accountEmail ?: return@withContext emptyList()
             val token = getAccessToken(accountEmail)
+            val collected = mutableListOf<Song>()
             var processedFileCount = 0
             querySongsRecursively(
                 folderId = connection.folderId.ifBlank { ROOT_ID },
                 folderPath = connection.folderName.ifBlank { "My Drive" },
                 accountEmail = accountEmail,
                 token = token,
-                onSongProcessed = {
+                onSongFound = { song ->
+                    collected += song
                     processedFileCount += 1
+                    onSongDiscovered?.invoke(song)
                     onProgress?.invoke(processedFileCount)
                 },
             )
+            collected.sortedByDescending { it.addedAtEpochMillis }
         }
     }
 
@@ -77,14 +84,13 @@ class GoogleDriveMusicDataSource @Inject constructor(
         folderPath: String,
         accountEmail: String,
         token: String,
-        onSongProcessed: () -> Unit,
-    ): List<Song> {
+        onSongFound: suspend (Song) -> Unit,
+    ) {
         val children = driveListRequest(
             query = "'$folderId' in parents and trashed = false",
             token = token,
         ).optJSONArray("files").toJsonObjectList()
 
-        val songs = mutableListOf<Song>()
         val subfolders = mutableListOf<Pair<String, String>>()
 
         children.forEach { item ->
@@ -97,23 +103,21 @@ class GoogleDriveMusicDataSource @Inject constructor(
                 }
 
                 item.isSupportedAudioFile() -> {
-                    songs += item.toSong(folderPath = folderPath, accountEmail = accountEmail, token = token)
-                    onSongProcessed()
+                    val song = item.toSong(folderPath = folderPath, accountEmail = accountEmail, token = token)
+                    onSongFound(song)
                 }
             }
         }
 
         subfolders.forEach { (childId, childPath) ->
-            songs += querySongsRecursively(
+            querySongsRecursively(
                 folderId = childId,
                 folderPath = childPath,
                 accountEmail = accountEmail,
                 token = token,
-                onSongProcessed = onSongProcessed,
+                onSongFound = onSongFound,
             )
         }
-
-        return songs.sortedByDescending { it.addedAtEpochMillis }
     }
 
     private suspend fun getAccessToken(accountEmail: String): String {

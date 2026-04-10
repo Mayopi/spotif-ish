@@ -16,8 +16,14 @@ import com.example.musicapp.domain.player.PlaybackState
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 @Singleton
 class Media3PlaybackController @Inject constructor(
@@ -29,9 +35,14 @@ class Media3PlaybackController @Inject constructor(
     private var exoPlayer = ExoPlayer.Builder(context).build()
     private val state = MutableStateFlow(PlaybackState())
     private var currentQueue = emptyList<Song>()
+    private val controllerScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private var positionTicker: Job? = null
     private val playerListener =
         object : Player.Listener {
-            override fun onIsPlayingChanged(isPlaying: Boolean) = publishState()
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                publishState()
+                if (isPlaying) startPositionTicker() else stopPositionTicker()
+            }
 
             override fun onPlaybackStateChanged(playbackState: Int) = publishState()
 
@@ -40,6 +51,21 @@ class Media3PlaybackController @Inject constructor(
 
     init {
         exoPlayer.addListener(playerListener)
+    }
+
+    private fun startPositionTicker() {
+        if (positionTicker?.isActive == true) return
+        positionTicker = controllerScope.launch {
+            while (true) {
+                publishState()
+                delay(500L)
+            }
+        }
+    }
+
+    private fun stopPositionTicker() {
+        positionTicker?.cancel()
+        positionTicker = null
     }
 
     override fun observeState() = state.asStateFlow()
@@ -77,6 +103,7 @@ class Media3PlaybackController @Inject constructor(
     fun player(): ExoPlayer = exoPlayer
 
     fun release() {
+        stopPositionTicker()
         exoPlayer.release()
     }
 
@@ -124,6 +151,7 @@ class Media3PlaybackController @Inject constructor(
         } else {
             DefaultMediaSourceFactory(appContext)
         }
+        stopPositionTicker()
         val currentPlayer = exoPlayer
         currentPlayer.removeListener(playerListener)
         currentPlayer.release()
