@@ -112,6 +112,9 @@ import com.example.musicapp.domain.model.Playlist
 import com.example.musicapp.domain.model.Song
 import com.example.musicapp.domain.model.DriveFolder
 import com.example.musicapp.ui.home.HomeViewModel
+import com.example.musicapp.ui.library.AlbumGroup
+import com.example.musicapp.ui.library.ArtistGroup
+import com.example.musicapp.ui.library.LibraryTab
 import com.example.musicapp.ui.library.LibraryViewModel
 import com.example.musicapp.ui.player.PlayerUiState
 import com.example.musicapp.ui.player.PlayerViewModel
@@ -208,6 +211,8 @@ fun MusicApp() {
                         LibraryScreen(
                             state = state,
                             onCreatePlaylist = viewModel::createPlaylist,
+                            onSelectTab = viewModel::selectTab,
+                            onPlayGroup = viewModel::playGroup,
                         )
                     }
                     composable(TopLevelDestination.PLAYER.route) {
@@ -841,14 +846,15 @@ private fun GenreTile(genre: Genre) {
 private fun LibraryScreen(
     state: com.example.musicapp.ui.library.LibraryUiState,
     onCreatePlaylist: () -> Unit,
+    onSelectTab: (LibraryTab) -> Unit,
+    onPlayGroup: (List<Song>) -> Unit,
 ) {
-    val tabs = listOf("Playlists", "Songs", "Artists", "Albums")
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
             .statusBarsPadding(),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 140.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
             Row(
@@ -886,62 +892,278 @@ private fun LibraryScreen(
             }
         }
         item {
-            Row(
-                modifier = Modifier.horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                tabs.forEachIndexed { index, label ->
-                    FilterChip(
-                        selected = index == 0,
-                        onClick = {},
-                        label = { Text(label, fontWeight = FontWeight.SemiBold) },
-                        shape = RoundedCornerShape(999.dp),
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = SpotifyGreen.copy(alpha = 0.18f),
-                            selectedLabelColor = SpotifyGreen,
-                            containerColor = SpotifyCard,
-                            labelColor = SpotifyWhite,
+            LibraryTabRow(
+                selected = state.selectedTab,
+                onSelect = onSelectTab,
+            )
+        }
+        when (state.selectedTab) {
+            LibraryTab.Playlists -> libraryPlaylistsSection(state)
+            LibraryTab.Songs -> librarySongsSection(state)
+            LibraryTab.Artists -> libraryArtistsSection(state, onPlayGroup)
+            LibraryTab.Albums -> libraryAlbumsSection(state, onPlayGroup)
+        }
+    }
+}
+
+@Composable
+private fun LibraryTabRow(
+    selected: LibraryTab,
+    onSelect: (LibraryTab) -> Unit,
+) {
+    Row(
+        modifier = Modifier.horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        LibraryTab.entries.forEach { tab ->
+            val isSelected = tab == selected
+            FilterChip(
+                selected = isSelected,
+                onClick = { onSelect(tab) },
+                label = { Text(tab.label, fontWeight = FontWeight.SemiBold) },
+                shape = RoundedCornerShape(999.dp),
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = SpotifyGreen.copy(alpha = 0.22f),
+                    selectedLabelColor = SpotifyGreen,
+                    containerColor = SpotifyCard,
+                    labelColor = SpotifyWhite,
+                ),
+                border = null,
+            )
+        }
+    }
+}
+
+private fun androidx.compose.foundation.lazy.LazyListScope.libraryPlaylistsSection(
+    state: com.example.musicapp.ui.library.LibraryUiState,
+) {
+    if (state.playlists.isEmpty()) {
+        item { EmptyLibraryMessage(text = "No playlists yet. Tap + to create one.") }
+        return
+    }
+    item {
+        LibrarySectionHeader(title = "Playlists", subtitle = "${state.playlists.size} playlists")
+    }
+    items(state.playlists) { playlist -> PlaylistRow(playlist) }
+}
+
+private fun androidx.compose.foundation.lazy.LazyListScope.librarySongsSection(
+    state: com.example.musicapp.ui.library.LibraryUiState,
+) {
+    if (state.songs.isEmpty()) {
+        item { EmptyLibraryMessage(text = "No songs yet. Connect Drive or add local files.") }
+        return
+    }
+    item {
+        LibrarySectionHeader(title = "All songs", subtitle = "${state.songs.size} tracks")
+    }
+    items(state.songs) { song ->
+        SongRow(song = song, onClick = {}, onToggleFavorite = {})
+    }
+}
+
+private fun androidx.compose.foundation.lazy.LazyListScope.libraryArtistsSection(
+    state: com.example.musicapp.ui.library.LibraryUiState,
+    onPlayGroup: (List<Song>) -> Unit,
+) {
+    if (state.artists.isEmpty()) {
+        item { EmptyLibraryMessage(text = "No artists to show yet.") }
+        return
+    }
+    item {
+        LibrarySectionHeader(title = "Artists", subtitle = "${state.artists.size} artists")
+    }
+    items(state.artists) { artist ->
+        ArtistRow(group = artist, onClick = { onPlayGroup(artist.songs) })
+    }
+}
+
+private fun androidx.compose.foundation.lazy.LazyListScope.libraryAlbumsSection(
+    state: com.example.musicapp.ui.library.LibraryUiState,
+    onPlayGroup: (List<Song>) -> Unit,
+) {
+    if (state.albums.isEmpty()) {
+        item { EmptyLibraryMessage(text = "No albums to show yet.") }
+        return
+    }
+    item {
+        LibrarySectionHeader(title = "Albums", subtitle = "${state.albums.size} albums")
+    }
+    items(state.albums) { album ->
+        AlbumRow(group = album, onClick = { onPlayGroup(album.songs) })
+    }
+}
+
+@Composable
+private fun LibrarySectionHeader(title: String, subtitle: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = SpotifyWhite,
+        )
+        Text(
+            text = subtitle,
+            style = MaterialTheme.typography.bodySmall,
+            color = SpotifyTextMuted,
+        )
+    }
+}
+
+@Composable
+private fun EmptyLibraryMessage(text: String) {
+    Text(
+        text = text,
+        color = SpotifyTextMuted,
+        style = MaterialTheme.typography.bodyMedium,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 24.dp),
+        textAlign = TextAlign.Center,
+    )
+}
+
+@Composable
+private fun ArtistRow(
+    group: ArtistGroup,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(52.dp)
+                .clip(CircleShape)
+                .background(
+                    Brush.linearGradient(
+                        listOf(
+                            SpotifyGreen.copy(alpha = 0.8f),
+                            Color(0xFF1F4D3A),
                         ),
-                        border = null,
+                    ),
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (group.primaryArtworkUri != null) {
+                AsyncImage(
+                    model = group.primaryArtworkUri,
+                    contentDescription = group.name,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(CircleShape),
+                    contentScale = ContentScale.Crop,
+                )
+            } else {
+                Text(
+                    text = group.name.take(1).uppercase(),
+                    color = SpotifyWhite,
+                    fontWeight = FontWeight.Black,
+                    style = MaterialTheme.typography.titleMedium,
+                )
+            }
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = group.name,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = SpotifyWhite,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = "Artist • ${group.songCount} songs",
+                style = MaterialTheme.typography.bodySmall,
+                color = SpotifyTextMuted,
+            )
+        }
+        Icon(
+            imageVector = Icons.Default.PlayArrow,
+            contentDescription = "Play",
+            tint = SpotifyTextMuted,
+        )
+    }
+}
+
+@Composable
+private fun AlbumRow(
+    group: AlbumGroup,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(52.dp)
+                .clip(RoundedCornerShape(6.dp)),
+        ) {
+            if (group.primaryArtworkUri != null) {
+                AsyncImage(
+                    model = group.primaryArtworkUri,
+                    contentDescription = group.name,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.linearGradient(
+                                listOf(Color(0xFF3B2208), Color(0xFFF39C12).copy(alpha = 0.6f)),
+                            ),
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = group.name.take(1).uppercase(),
+                        color = SpotifyWhite,
+                        fontWeight = FontWeight.Black,
                     )
                 }
             }
         }
-        if (state.playlists.isNotEmpty()) {
-            item {
-                Text(
-                    text = "Playlists",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = SpotifyWhite,
-                )
-            }
-            items(state.playlists) { playlist ->
-                PlaylistRow(playlist)
-            }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = group.name,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = SpotifyWhite,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = "${group.artist} • ${group.songCount} songs",
+                style = MaterialTheme.typography.bodySmall,
+                color = SpotifyTextMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = "All songs",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = SpotifyWhite,
-                )
-                Text(
-                    text = "${state.songs.size} tracks",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = SpotifyTextMuted,
-                )
-            }
-        }
-        items(state.songs) { song ->
-            SongRow(song = song, onClick = {}, onToggleFavorite = {})
-        }
+        Icon(
+            imageVector = Icons.Default.PlayArrow,
+            contentDescription = "Play",
+            tint = SpotifyTextMuted,
+        )
     }
 }
 
