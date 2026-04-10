@@ -5,6 +5,7 @@ import android.content.Intent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.musicapp.core.DriveAuthSessionStore
+import com.example.musicapp.data.repository.DriveTokenStore
 import com.example.musicapp.debug.DriveDebugLogger
 import com.example.musicapp.domain.model.DriveFolder
 import com.example.musicapp.domain.model.FolderConnection
@@ -65,6 +66,7 @@ class SettingsViewModel @Inject constructor(
     private val listDriveFoldersUseCase: ListDriveFoldersUseCase,
     private val googleDriveAuthManager: GoogleDriveAuthManager,
     private val driveAuthSessionStore: DriveAuthSessionStore,
+    private val driveTokenStore: DriveTokenStore,
     private val driveDebugLogger: DriveDebugLogger,
 ) : ViewModel() {
 
@@ -194,6 +196,7 @@ class SettingsViewModel @Inject constructor(
             runCatching {
                 googleDriveAuthManager.clearSession(activity)
                 driveAuthSessionStore.clear()
+                driveTokenStore.clear()
                 pendingDriveAccount = null
                 updateDriveFolderUseCase(null)
                 driveFoldersState.value = emptyList()
@@ -305,7 +308,12 @@ class SettingsViewModel @Inject constructor(
                 active = true,
             ),
         )
-        if (!accessToken.isNullOrBlank()) driveAuthSessionStore.update(account.email, accessToken)
+        if (!accessToken.isNullOrBlank()) {
+            driveAuthSessionStore.update(account.email, accessToken)
+            // Persist immediately so the very first sync after a process restart can
+            // proceed without waiting for the silent re-auth path to kick in.
+            driveTokenStore.save(account.email, accessToken)
+        }
         driveDebugLogger.log("finalize_connection_saved", "Drive connection saved. Skipping automatic library refresh until folder selection.")
         workingState.value = false
         driveDebugLogger.log("finalize_connection_complete", "Drive connected for ${account.email}")

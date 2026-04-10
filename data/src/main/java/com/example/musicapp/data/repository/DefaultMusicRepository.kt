@@ -26,6 +26,7 @@ import kotlinx.coroutines.withContext
 class DefaultMusicRepository @Inject constructor(
     private val localMusicDataSource: LocalMusicDataSource,
     private val driveMusicDataSource: DriveMusicDataSource,
+    private val driveLibraryStore: DriveLibraryStore,
     private val favoritesRepository: FavoritesRepository,
     private val dispatchersProvider: DispatchersProvider,
 ) : MusicRepository {
@@ -37,7 +38,22 @@ class DefaultMusicRepository @Inject constructor(
     private var driveRefreshJob: Job? = null
 
     init {
-        scope.launch { refreshLocalLibrary() }
+        scope.launch {
+            // Hydrate the in-memory Drive library from disk before kicking off any
+            // network sync. Without this, the home/library screens would flash an
+            // empty state every time the app restarts until the next refresh runs.
+            val cached = driveLibraryStore.load()
+            if (cached.isNotEmpty()) {
+                driveSongs.value = cached
+                driveSyncState.value = DriveSyncState(
+                    isSyncing = false,
+                    lastError = null,
+                    lastSyncedSongCount = cached.size,
+                    processedFileCount = cached.size,
+                )
+            }
+            refreshLocalLibrary()
+        }
     }
 
     override fun observeAllSongs(): Flow<List<Song>> {
@@ -68,44 +84,55 @@ class DefaultMusicRepository @Inject constructor(
     }
 
     override suspend fun refreshDriveLibrary() {
-        // Reset the Drive library at the start of a sync so stale entries from a
-        // previous folder selection are cleared. Songs are appended incrementally as
-        // they are discovered below, so the UI updates in real time.
-        driveSongs.value = emptyList()
+        // The current in-memory list (which itself was hydrated from disk on launch)
+        // is the change-detection baseline: any file whose Drive `modifiedTime`
+        // matches a cached entry's `addedAtEpochMillis` is reused as-is, skipping the
+        // expensive prefix download + MediaMetadataRetriever step.
+        val baselineById = driveSongs.value.associateBy { it.id }
+
         driveSyncState.value = DriveSyncState(
             isSyncing = true,
             lastError = null,
-            lastSyncedSongCount = 0,
+            lastSyncedSongCount = baselineById.size,
             processedFileCount = 0,
         )
 
+        var processed = 0
         val finalSongs = withContext(dispatchersProvider.io) {
             driveMusicDataSource.fetchSongs(
+                previousById = baselineById,
                 onSongDiscovered = { song ->
-                    // Append the freshly discovered song and push an updated state so the
-                    // home/library/search screens render it immediately instead of waiting
-                    // for the whole scan to finish.
-                    val updated = driveSongs.value + song
-                    driveSongs.value = updated
+                    processed += 1
+                    val cached = baselineById[song.id]
+                    // Only push UI updates for songs that are actually new or changed.
+                    // Cached songs are already in driveSongs from the previous run, so
+                    // re-emitting them just churns Compose without changing anything.
+                    if (cached == null || cached != song) {
+                        val current = driveSongs.value
+                        driveSongs.value = current.upsertById(song)
+                    }
                     driveSyncState.value = DriveSyncState(
                         isSyncing = true,
                         lastError = null,
-                        lastSyncedSongCount = updated.size,
-                        processedFileCount = updated.size,
+                        lastSyncedSongCount = driveSongs.value.size,
+                        processedFileCount = processed,
                     )
                 },
                 onProgress = null,
             )
         }
 
-        // Replace with the final, deterministic ordering once the scan finishes so the
-        // user sees a stable list after the live stream settles.
-        driveSongs.value = finalSongs
+        // Replace with the canonical post-scan list. This implicitly drops any songs
+        // that the scan didn't visit — i.e. files deleted from Drive between syncs —
+        // so the persisted library always reflects the current state of the folder.
+        val sorted = finalSongs.sortedByDescending { it.addedAtEpochMillis }
+        driveSongs.value = sorted
+        driveLibraryStore.save(sorted)
         driveSyncState.value = DriveSyncState(
             isSyncing = false,
             lastError = null,
-            lastSyncedSongCount = finalSongs.size,
-            processedFileCount = finalSongs.size,
+            lastSyncedSongCount = sorted.size,
+            processedFileCount = sorted.size,
         )
     }
 
@@ -115,8 +142,9 @@ class DefaultMusicRepository @Inject constructor(
             runCatching {
                 refreshDriveLibrary()
             }.onFailure { throwable ->
-                // Keep whatever songs were already streamed in so the UI still shows them
-                // even though the overall sync failed partway through.
+                // Persist whatever we managed to scan so the partial library survives
+                // restarts even if the sync errored out partway through.
+                runCatching { driveLibraryStore.save(driveSongs.value) }
                 val partialCount = driveSongs.value.size
                 driveSyncState.value = DriveSyncState(
                     isSyncing = false,
@@ -130,21 +158,26 @@ class DefaultMusicRepository @Inject constructor(
 
     override suspend fun search(query: String): List<Song> {
         val normalized = query.trim().lowercase()
-        if (normalized.isBlank()) return observeAllSongs().map { it.take(20) }.firstValue()
+        if (normalized.isBlank()) return observeAllSongs().map { it.take(20) }.first()
         return observeAllSongs().map { songs ->
             songs.filter { song ->
                 song.title.lowercase().contains(normalized) ||
                     song.artist.lowercase().contains(normalized) ||
                     song.album.lowercase().contains(normalized)
             }
-        }.firstValue()
+        }.first()
     }
 
     override suspend fun getSong(songId: String): Song? {
-        return observeAllSongs().map { songs -> songs.firstOrNull { it.id == songId } }.firstValue()
+        return observeAllSongs().map { songs -> songs.firstOrNull { it.id == songId } }.first()
     }
-}
 
-private suspend fun <T> Flow<T>.firstValue(): T {
-    return first()
+    private fun List<Song>.upsertById(song: Song): List<Song> {
+        val index = indexOfFirst { it.id == song.id }
+        return if (index >= 0) {
+            toMutableList().also { it[index] = song }
+        } else {
+            this + song
+        }
+    }
 }

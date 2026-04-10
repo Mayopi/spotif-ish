@@ -1,17 +1,21 @@
 package com.example.musicapp.data.drive
 
-import android.accounts.Account
 import android.content.Context
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import com.example.musicapp.core.DriveAuthSessionStore
+import com.example.musicapp.data.repository.DriveTokenStore
 import com.example.musicapp.domain.model.DriveFolder
 import com.example.musicapp.domain.model.Song
 import com.example.musicapp.domain.model.SourceType
 import com.example.musicapp.domain.repository.SettingsRepository
-import com.google.android.gms.auth.GoogleAuthUtil
+import com.google.android.gms.auth.api.identity.AuthorizationRequest
+import com.google.android.gms.auth.api.identity.Identity
+import com.google.android.gms.common.api.Scope
+import com.google.android.gms.tasks.Tasks
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -26,18 +30,19 @@ class GoogleDriveMusicDataSource @Inject constructor(
     @ApplicationContext private val context: Context,
     private val settingsRepository: SettingsRepository,
     private val authSessionStore: DriveAuthSessionStore,
+    private val driveTokenStore: DriveTokenStore,
 ) : DriveMusicDataSource {
 
     override suspend fun listFolders(parentId: String, parentPath: String): List<DriveFolder> {
         return withContext(Dispatchers.IO) {
             val settings = settingsRepository.observeSettings().first()
             val accountEmail = settings.connectedDriveFolder?.accountEmail ?: return@withContext emptyList()
-            val token = getAccessToken(accountEmail)
-            queryFolders(parentId = parentId, parentPath = parentPath, token = token)
+            queryFoldersAuth(parentId = parentId, parentPath = parentPath, accountEmail = accountEmail)
         }
     }
 
     override suspend fun fetchSongs(
+        previousById: Map<String, Song>,
         onSongDiscovered: (suspend (Song) -> Unit)?,
         onProgress: ((processedFileCount: Int) -> Unit)?,
     ): List<Song> {
@@ -45,14 +50,13 @@ class GoogleDriveMusicDataSource @Inject constructor(
             val settings = settingsRepository.observeSettings().first()
             val connection = settings.connectedDriveFolder ?: return@withContext emptyList()
             val accountEmail = connection.accountEmail ?: return@withContext emptyList()
-            val token = getAccessToken(accountEmail)
             val collected = mutableListOf<Song>()
             var processedFileCount = 0
             querySongsRecursively(
                 folderId = connection.folderId.ifBlank { ROOT_ID },
                 folderPath = connection.folderName.ifBlank { "My Drive" },
                 accountEmail = accountEmail,
-                token = token,
+                previousById = previousById,
                 onSongFound = { song ->
                     collected += song
                     processedFileCount += 1
@@ -64,13 +68,15 @@ class GoogleDriveMusicDataSource @Inject constructor(
         }
     }
 
-    private suspend fun queryFolders(
+    private suspend fun queryFoldersAuth(
         parentId: String,
         parentPath: String,
-        token: String,
+        accountEmail: String,
     ): List<DriveFolder> {
         val query = "'$parentId' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-        val response = driveListRequest(query = query, token = token)
+        val response = executeAuthenticated(accountEmail) { token ->
+            driveListRequest(query, token)
+        }
         return response.optJSONArray("files").toJsonObjectList().map { item ->
             val name = item.getString("name")
             DriveFolder(
@@ -85,13 +91,13 @@ class GoogleDriveMusicDataSource @Inject constructor(
         folderId: String,
         folderPath: String,
         accountEmail: String,
-        token: String,
+        previousById: Map<String, Song>,
         onSongFound: suspend (Song) -> Unit,
     ) {
-        val children = driveListRequest(
-            query = "'$folderId' in parents and trashed = false",
-            token = token,
-        ).optJSONArray("files").toJsonObjectList()
+        val response = executeAuthenticated(accountEmail) { token ->
+            driveListRequest("'$folderId' in parents and trashed = false", token)
+        }
+        val children = response.optJSONArray("files").toJsonObjectList()
 
         val subfolders = mutableListOf<Pair<String, String>>()
 
@@ -105,7 +111,17 @@ class GoogleDriveMusicDataSource @Inject constructor(
                 }
 
                 item.isSupportedAudioFile() -> {
-                    val song = item.toSong(folderPath = folderPath, accountEmail = accountEmail, token = token)
+                    val songId = "drive:$id"
+                    val modifiedTime = isoToEpochMillis(item.optString("modifiedTime"))
+                    val cached = previousById[songId]
+                    val song = if (cached != null && cached.addedAtEpochMillis == modifiedTime) {
+                        // Re-sync optimization: the file hasn't changed since the last
+                        // successful scan, so reuse the previously parsed metadata
+                        // (and album art URI) without downloading anything new.
+                        cached
+                    } else {
+                        buildSong(item, folderPath, accountEmail)
+                    }
                     onSongFound(song)
                 }
             }
@@ -116,48 +132,27 @@ class GoogleDriveMusicDataSource @Inject constructor(
                 folderId = childId,
                 folderPath = childPath,
                 accountEmail = accountEmail,
-                token = token,
+                previousById = previousById,
                 onSongFound = onSongFound,
             )
         }
     }
 
-    private suspend fun getAccessToken(accountEmail: String): String {
-        authSessionStore.tokenFor(accountEmail)?.let { return it }
-        val token = GoogleAuthUtil.getToken(
-            context,
-            Account(accountEmail, "com.google"),
-            "oauth2:https://www.googleapis.com/auth/drive.readonly",
-        )
-        authSessionStore.update(accountEmail, token)
-        return token
-    }
-
-    private fun driveListRequest(query: String, token: String): JSONObject {
-        val encodedQuery = URLEncoder.encode(query, Charsets.UTF_8.name())
-        val encodedFields = URLEncoder.encode(
-            "files(id,name,mimeType,modifiedTime,fileExtension,size)",
-            Charsets.UTF_8.name(),
-        )
-        val url = URL("$DRIVE_FILES_ENDPOINT?q=$encodedQuery&pageSize=1000&fields=$encodedFields")
-        return openJsonRequest(url, token)
-    }
-
-    private fun JSONObject.toSong(
+    private suspend fun buildSong(
+        item: JSONObject,
         folderPath: String,
         accountEmail: String,
-        token: String,
     ): Song {
-        val id = getString("id")
-        val name = getString("name")
+        val id = item.getString("id")
+        val name = item.getString("name")
+        val fileSize = item.optString("size").toLongOrNull() ?: 0L
         val streamUrl = "$DRIVE_FILES_ENDPOINT/$id?alt=media"
-        val mimeType = optString("mimeType").ifBlank { guessMimeTypeFromName(name).orEmpty() }
-        val embeddedMetadata = extractMetadata(
+        val mimeType = item.optString("mimeType").ifBlank { guessMimeTypeFromName(name).orEmpty() }
+        val embeddedMetadata = extractMetadataAuth(
             songId = id,
-            fileName = name,
-            mimeType = mimeType,
             mediaUrl = streamUrl,
-            token = token,
+            fileSize = fileSize,
+            accountEmail = accountEmail,
         )
         val titleFallback = name.substringBeforeLast(".")
         val duration = embeddedMetadata.durationMs ?: 0L
@@ -171,39 +166,43 @@ class GoogleDriveMusicDataSource @Inject constructor(
             sourceType = SourceType.DRIVE,
             playableUri = streamUrl,
             mimeType = mimeType.ifBlank { null },
-            addedAtEpochMillis = isoToEpochMillis(optString("modifiedTime")),
+            addedAtEpochMillis = isoToEpochMillis(item.optString("modifiedTime")),
             authAccountEmail = accountEmail,
         )
     }
 
-    private fun extractMetadata(
+    /**
+     * Option A metadata extraction: download a bounded prefix of the audio file to
+     * a scratch file in the cache directory and run [MediaMetadataRetriever] against
+     * the local path. Running the retriever locally avoids the Authorization-header
+     * propagation quirks that make remote extraction unreliable for FLAC and for
+     * embedded picture data.
+     *
+     * The scratch file is deleted in `finally` so it lives only for the lifetime of
+     * one call. Album art bytes are persisted separately under `cacheDir/drive_art`
+     * for Coil to load.
+     */
+    private suspend fun extractMetadataAuth(
         songId: String,
-        fileName: String,
-        mimeType: String,
         mediaUrl: String,
-        token: String,
+        fileSize: Long,
+        accountEmail: String,
     ): EmbeddedMetadata {
-        // FLAC: Android's MediaMetadataRetriever is unreliable over HTTP because the
-        // native extractor doesn't always propagate the Authorization header on the
-        // internal range requests it issues while walking FLAC metadata blocks. We use
-        // a pure-Kotlin streaming parser that reads directly from the Drive response.
-        val isFlac = mimeType.equals("audio/flac", true) ||
-            mimeType.equals("audio/x-flac", true) ||
-            fileName.endsWith(".flac", ignoreCase = true)
-        if (isFlac) {
-            streamFlacMetadata(songId, mediaUrl, token)?.let { return it }
+        val tempDir = File(context.cacheDir, "drive_meta").apply { mkdirs() }
+        val tempFile = File(tempDir, "${sanitize(songId)}.bin")
+        val prefixSize = when {
+            fileSize <= 0L -> METADATA_PREFIX_SIZE
+            fileSize < METADATA_PREFIX_SIZE -> fileSize
+            else -> METADATA_PREFIX_SIZE
         }
-
-        // Everything else (MP3, M4A, OGG, …) still goes through MediaMetadataRetriever.
-        // It works well for these formats, uses a single authenticated request, and
-        // does NOT write anything to disk itself. We additionally pull `embeddedPicture`
-        // so cover art is surfaced for MP3/ID3 files too.
-        return runCatching {
+        return try {
+            executeAuthenticated(accountEmail) { token ->
+                downloadPrefix(mediaUrl, token, prefixSize, tempFile)
+            }
             MediaMetadataRetriever().use { retriever ->
-                retriever.setDataSource(mediaUrl, mapOf("Authorization" to "Bearer $token"))
-                val pictureUri = runCatching { retriever.embeddedPicture }
-                    .getOrNull()
-                    ?.let { saveAlbumArt(songId, it) }
+                retriever.setDataSource(tempFile.absolutePath)
+                val pictureBytes = runCatching { retriever.embeddedPicture }.getOrNull()
+                val pictureUri = pictureBytes?.let { saveAlbumArt(songId, it) }
                 EmbeddedMetadata(
                     title = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE),
                     artist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST),
@@ -212,61 +211,148 @@ class GoogleDriveMusicDataSource @Inject constructor(
                     albumArtUri = pictureUri,
                 )
             }
-        }.getOrDefault(EmbeddedMetadata())
+        } catch (_: Throwable) {
+            EmbeddedMetadata()
+        } finally {
+            runCatching { tempFile.delete() }
+        }
     }
 
-    private fun streamFlacMetadata(
-        songId: String,
+    private fun downloadPrefix(
         mediaUrl: String,
         token: String,
-    ): EmbeddedMetadata? {
-        // Bound the read to the first few megabytes. Drive API supports HTTP range
-        // requests, so this prevents the server from trying to stream the entire audio
-        // payload just to satisfy the connection. 8 MiB is more than enough to cover
-        // STREAMINFO + VORBIS_COMMENT + a generous embedded PICTURE block.
+        sizeBytes: Long,
+        dest: File,
+    ) {
         val connection = (URL(mediaUrl).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             setRequestProperty("Authorization", "Bearer $token")
-            setRequestProperty("Range", "bytes=0-${FLAC_METADATA_BYTE_BUDGET - 1}")
+            if (sizeBytes > 0) {
+                setRequestProperty("Range", "bytes=0-${sizeBytes - 1}")
+            }
             connectTimeout = 15_000
             readTimeout = 30_000
         }
-        return try {
+        try {
             val code = connection.responseCode
-            if (code !in 200..299 && code != 206) return null
-            connection.inputStream.buffered().use { stream ->
-                val parsed = FlacStreamMetadataParser.parse(stream) ?: return null
-                val artUri = parsed.pictureBytes?.let { saveAlbumArt(songId, it) }
-                EmbeddedMetadata(
-                    title = parsed.title,
-                    artist = parsed.artist,
-                    album = parsed.album,
-                    durationMs = parsed.durationMs,
-                    albumArtUri = artUri,
-                )
+            if (code == 401) throw HttpUnauthorizedException("Drive prefix download unauthorized")
+            if (code !in 200..299 && code != 206) {
+                throw IOException("Drive prefix download HTTP $code")
             }
-        } catch (_: Throwable) {
-            null
+            connection.inputStream.use { input ->
+                dest.outputStream().use { output -> input.copyTo(output) }
+            }
         } finally {
             connection.disconnect()
         }
     }
 
     /**
-     * Persist the extracted album art to the app's cache directory and return a
-     * `file://` URI that Coil can load. This is persistent image cache, NOT a
-     * short-lived scratch file used by the metadata extractor — the bytes already
-     * came from the in-memory streaming parser above.
+     * Persist extracted album art to a stable cache file so Coil can load it via a
+     * `file://` URI from any future composition. This is the *output* of the
+     * extractor — not a scratch file used during extraction.
      */
     private fun saveAlbumArt(songId: String, bytes: ByteArray): String? {
         if (bytes.isEmpty()) return null
         return runCatching {
             val dir = File(context.cacheDir, "drive_art").apply { mkdirs() }
-            val safeName = songId.replace(Regex("[^A-Za-z0-9._-]"), "_")
-            val file = File(dir, "$safeName.img")
+            val file = File(dir, "${sanitize(songId)}.img")
             file.writeBytes(bytes)
             Uri.fromFile(file).toString()
         }.getOrNull()
+    }
+
+    /**
+     * Wraps an authenticated Drive call with one-shot 401 retry. If the cached token
+     * has expired, [HttpUnauthorizedException] from the inner [block] triggers a
+     * forced refresh via [refreshAccessToken] and a single retry. A second 401 is
+     * propagated so the caller can surface the failure.
+     */
+    private suspend fun <T> executeAuthenticated(
+        accountEmail: String,
+        block: (String) -> T,
+    ): T {
+        val token = getAccessToken(accountEmail)
+        return try {
+            block(token)
+        } catch (_: HttpUnauthorizedException) {
+            val refreshed = refreshAccessToken(accountEmail)
+            block(refreshed)
+        }
+    }
+
+    private suspend fun getAccessToken(accountEmail: String): String {
+        // 1. In-memory cache hit?
+        authSessionStore.tokenFor(accountEmail)?.let { return it }
+
+        // 2. Persisted from a previous run? The Drive token stays in encrypted prefs
+        //    so it survives process death. Hydrate the in-memory store from it so
+        //    the rest of the sync flow doesn't have to know it came from disk.
+        driveTokenStore.load()
+            ?.takeIf { it.accountEmail == accountEmail }
+            ?.let { persisted ->
+                authSessionStore.update(persisted.accountEmail, persisted.accessToken)
+                return persisted.accessToken
+            }
+
+        // 3. Nothing cached anywhere — request a fresh token via silent re-auth.
+        //    If the user previously granted Drive scope this completes without UI;
+        //    otherwise [fetchToken] throws and the caller surfaces the failure.
+        return fetchToken(accountEmail)
+    }
+
+    /**
+     * Force-refresh the access token after a 401. Both caches are overwritten by
+     * [fetchToken] on success, so a stale value never lingers past a successful
+     * refresh.
+     */
+    private suspend fun refreshAccessToken(accountEmail: String): String {
+        return fetchToken(accountEmail)
+    }
+
+    /**
+     * Silent token fetch via Google Identity Services.
+     *
+     * The original sign-in went through Credential Manager + `AuthorizationClient`,
+     * which means the granted Drive scope is owned by Identity Services — NOT by the
+     * legacy `GoogleAuthUtil` AccountManager flow. Calling `AuthorizationClient` from
+     * the application context returns a fresh access token with no UI as long as the
+     * user previously granted the scope. If consent has been revoked,
+     * `hasResolution() == true` and we surface an error so the user can reconnect
+     * from Settings.
+     */
+    private suspend fun fetchToken(accountEmail: String): String {
+        val request = AuthorizationRequest.builder()
+            .setRequestedScopes(
+                listOf(Scope("https://www.googleapis.com/auth/drive.readonly")),
+            )
+            .build()
+
+        val result = withContext(Dispatchers.IO) {
+            Tasks.await(Identity.getAuthorizationClient(context).authorize(request))
+        }
+
+        if (result.hasResolution()) {
+            throw IllegalStateException(
+                "Google Drive needs to be re-authorized. Please reconnect from Settings.",
+            )
+        }
+        val token = result.accessToken
+            ?: throw IllegalStateException("Google Drive returned no access token.")
+
+        authSessionStore.update(accountEmail, token)
+        driveTokenStore.save(accountEmail, token)
+        return token
+    }
+
+    private fun driveListRequest(query: String, token: String): JSONObject {
+        val encodedQuery = URLEncoder.encode(query, Charsets.UTF_8.name())
+        val encodedFields = URLEncoder.encode(
+            "files(id,name,mimeType,modifiedTime,fileExtension,size)",
+            Charsets.UTF_8.name(),
+        )
+        val url = URL("$DRIVE_FILES_ENDPOINT?q=$encodedQuery&pageSize=1000&fields=$encodedFields")
+        return openJsonRequest(url, token)
     }
 
     private fun openJsonRequest(url: URL, token: String): JSONObject {
@@ -279,14 +365,16 @@ class GoogleDriveMusicDataSource @Inject constructor(
         }
 
         return try {
-            val body = if (connection.responseCode in 200..299) {
+            val code = connection.responseCode
+            if (code == 401) throw HttpUnauthorizedException("Drive API unauthorized")
+            val body = if (code in 200..299) {
                 connection.inputStream.bufferedReader().use { it.readText() }
             } else {
                 val errorBody = connection.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
                 throw IllegalStateException(
                     buildString {
                         append("Drive API error ")
-                        append(connection.responseCode)
+                        append(code)
                         if (errorBody.isNotBlank()) {
                             append(": ")
                             append(errorBody)
@@ -332,6 +420,9 @@ class GoogleDriveMusicDataSource @Inject constructor(
         return runCatching { java.time.Instant.parse(value).toEpochMilli() }.getOrDefault(0L)
     }
 
+    private fun sanitize(name: String): String =
+        name.replace(Regex("[^A-Za-z0-9._-]"), "_")
+
     private data class EmbeddedMetadata(
         val title: String? = null,
         val artist: String? = null,
@@ -340,10 +431,12 @@ class GoogleDriveMusicDataSource @Inject constructor(
         val albumArtUri: String? = null,
     )
 
+    private class HttpUnauthorizedException(message: String) : IOException(message)
+
     private companion object {
         private const val ROOT_ID = "root"
         private const val DRIVE_FILES_ENDPOINT = "https://www.googleapis.com/drive/v3/files"
-        private const val FLAC_METADATA_BYTE_BUDGET = 8L * 1024L * 1024L
+        private const val METADATA_PREFIX_SIZE = 4L * 1024L * 1024L
         private val AUDIO_EXTENSIONS = setOf("mp3", "flac", "wav", "aac", "m4a", "ogg", "opus", "wma", "aiff", "aif", "alac")
     }
 }
