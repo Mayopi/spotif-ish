@@ -1,22 +1,40 @@
 package com.example.musicapp.ui
 
-import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
 
-private val LightColors = lightColorScheme()
-private val DarkColors = darkColorScheme()
+val SpotifyGreen = Color(0xFF1DB954)
+val SpotifyCard = Color(0xFF212121)
+val SpotifyBackground = Color(0xFF121212)
+val SpotifyMuted = Color(0xFF535353)
+val SpotifyTextMuted = Color(0xFFB3B3B3)
+val SpotifyWhite = Color(0xFFF5F5F5)
+
+private val SpotifishColors: ColorScheme = darkColorScheme(
+    primary = SpotifyGreen,
+    onPrimary = SpotifyBackground,
+    secondary = SpotifyCard,
+    onSecondary = SpotifyWhite,
+    tertiary = SpotifyMuted,
+    background = SpotifyBackground,
+    onBackground = SpotifyWhite,
+    surface = SpotifyBackground,
+    onSurface = SpotifyWhite,
+    surfaceVariant = SpotifyCard,
+    onSurfaceVariant = SpotifyTextMuted,
+    outline = SpotifyMuted,
+)
 
 @Composable
 fun AppTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    darkTheme: Boolean = true,
     content: @Composable () -> Unit,
 ) {
     MaterialTheme(
-        colorScheme = if (darkTheme) DarkColors else LightColors,
+        colorScheme = SpotifishColors,
         content = content,
     )
 }
-

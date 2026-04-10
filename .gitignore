@@ -4,5 +4,6 @@
 /.idea/
 /build/
 **/build/
+.kotlin/
 captures/
 PRD.md

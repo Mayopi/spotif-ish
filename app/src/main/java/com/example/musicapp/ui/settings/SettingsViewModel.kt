@@ -13,7 +13,6 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 data class SettingsUiState(
-    val isDarkTheme: Boolean = false,
     val connectedDriveFolderName: String = "Not connected",
     val selectedFolderCount: Int = 0,
 )
@@ -27,7 +26,6 @@ class SettingsViewModel @Inject constructor(
     val uiState: StateFlow<SettingsUiState> = observeSettingsUseCase()
         .map { settings ->
             SettingsUiState(
-                isDarkTheme = settings.isDarkTheme,
                 connectedDriveFolderName = settings.connectedDriveFolder?.folderName ?: "Not connected",
                 selectedFolderCount = settings.selectedFolders.size,
             )
@@ -38,4 +36,3 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { refreshLibrariesUseCase() }
     }
 }
-
