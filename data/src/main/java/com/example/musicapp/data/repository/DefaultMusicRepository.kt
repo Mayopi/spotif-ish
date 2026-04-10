@@ -3,6 +3,7 @@ package com.example.musicapp.data.repository
 import com.example.musicapp.core.DispatchersProvider
 import com.example.musicapp.data.drive.DriveMusicDataSource
 import com.example.musicapp.data.local.LocalMusicDataSource
+import com.example.musicapp.domain.model.DriveSyncState
 import com.example.musicapp.domain.model.HomeSection
 import com.example.musicapp.domain.model.Song
 import com.example.musicapp.domain.model.SourceType
@@ -11,6 +12,7 @@ import com.example.musicapp.domain.repository.MusicRepository
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -31,6 +33,8 @@ class DefaultMusicRepository @Inject constructor(
     private val scope = CoroutineScope(SupervisorJob() + dispatchersProvider.io)
     private val localSongs = MutableStateFlow<List<Song>>(emptyList())
     private val driveSongs = MutableStateFlow<List<Song>>(emptyList())
+    private val driveSyncState = MutableStateFlow(DriveSyncState())
+    private var driveRefreshJob: Job? = null
 
     init {
         scope.launch { refreshLocalLibrary() }
@@ -55,6 +59,8 @@ class DefaultMusicRepository @Inject constructor(
         }
     }
 
+    override fun observeDriveSyncState(): Flow<DriveSyncState> = driveSyncState
+
     override suspend fun refreshLocalLibrary() {
         localSongs.value = withContext(dispatchersProvider.io) {
             localMusicDataSource.scan()
@@ -62,8 +68,46 @@ class DefaultMusicRepository @Inject constructor(
     }
 
     override suspend fun refreshDriveLibrary() {
-        driveSongs.value = withContext(dispatchersProvider.io) {
-            driveMusicDataSource.fetchSongs()
+        val previousCount = driveSyncState.value.lastSyncedSongCount
+        val songs = withContext(dispatchersProvider.io) {
+            driveMusicDataSource.fetchSongs { processedCount ->
+                driveSyncState.value = DriveSyncState(
+                    isSyncing = true,
+                    lastError = null,
+                    lastSyncedSongCount = previousCount,
+                    processedFileCount = processedCount,
+                )
+            }
+        }
+        driveSongs.value = songs
+        driveSyncState.value = DriveSyncState(
+            isSyncing = false,
+            lastError = null,
+            lastSyncedSongCount = songs.size,
+            processedFileCount = songs.size,
+        )
+    }
+
+    override fun enqueueDriveLibraryRefresh() {
+        if (driveRefreshJob?.isActive == true) return
+        driveRefreshJob = scope.launch {
+            val previousCount = driveSyncState.value.lastSyncedSongCount
+            driveSyncState.value = DriveSyncState(
+                isSyncing = true,
+                lastError = null,
+                lastSyncedSongCount = previousCount,
+                processedFileCount = 0,
+            )
+            runCatching {
+                refreshDriveLibrary()
+            }.onFailure { throwable ->
+                driveSyncState.value = DriveSyncState(
+                    isSyncing = false,
+                    lastError = throwable.message ?: "Drive sync failed.",
+                    lastSyncedSongCount = previousCount,
+                    processedFileCount = driveSyncState.value.processedFileCount,
+                )
+            }
         }
     }
 

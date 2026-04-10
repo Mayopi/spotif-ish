@@ -8,7 +8,9 @@ import com.example.musicapp.core.DriveAuthSessionStore
 import com.example.musicapp.debug.DriveDebugLogger
 import com.example.musicapp.domain.model.DriveFolder
 import com.example.musicapp.domain.model.FolderConnection
+import com.example.musicapp.domain.usecase.EnqueueDriveLibraryRefreshUseCase
 import com.example.musicapp.domain.usecase.ListDriveFoldersUseCase
+import com.example.musicapp.domain.usecase.ObserveDriveSyncStateUseCase
 import com.example.musicapp.domain.usecase.ObserveSettingsUseCase
 import com.example.musicapp.domain.usecase.RefreshLibrariesUseCase
 import com.example.musicapp.domain.usecase.UpdateDriveFolderUseCase
@@ -35,6 +37,8 @@ data class SettingsUiState(
     val selectedFolderCount: Int = 0,
     val isWorking: Boolean = false,
     val isFolderLoading: Boolean = false,
+    val isDriveSyncing: Boolean = false,
+    val driveSyncStatusText: String = "Idle",
     val availableDriveFolders: List<DriveFolder> = emptyList(),
     val isFolderPickerVisible: Boolean = false,
     val currentDriveFolderPath: String = "My Drive",
@@ -55,6 +59,8 @@ sealed interface SettingsEvent {
 class SettingsViewModel @Inject constructor(
     observeSettingsUseCase: ObserveSettingsUseCase,
     private val refreshLibrariesUseCase: RefreshLibrariesUseCase,
+    private val observeDriveSyncStateUseCase: ObserveDriveSyncStateUseCase,
+    private val enqueueDriveLibraryRefreshUseCase: EnqueueDriveLibraryRefreshUseCase,
     private val updateDriveFolderUseCase: UpdateDriveFolderUseCase,
     private val listDriveFoldersUseCase: ListDriveFoldersUseCase,
     private val googleDriveAuthManager: GoogleDriveAuthManager,
@@ -93,8 +99,23 @@ class SettingsViewModel @Inject constructor(
             )
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsUiState())
-    private val pickerState = combine(
+    private val syncAwareState = combine(
         baseState,
+        observeDriveSyncStateUseCase(),
+    ) { ui, syncState ->
+        ui.copy(
+            isDriveSyncing = syncState.isSyncing,
+            driveSyncStatusText = when {
+                syncState.isSyncing -> "${syncState.processedFileCount} files processed"
+                !syncState.lastError.isNullOrBlank() -> syncState.lastError.orEmpty()
+                syncState.lastSyncedSongCount > 0 -> "${syncState.lastSyncedSongCount} tracks synced"
+                else -> "Ready to sync"
+            },
+        )
+    }
+
+    private val pickerState = combine(
+        syncAwareState,
         workingState,
         folderLoadingState,
         driveFoldersState,
@@ -121,10 +142,8 @@ class SettingsViewModel @Inject constructor(
 
     fun refreshLibraries() {
         viewModelScope.launch {
-            driveDebugLogger.log("refresh_libraries", "Manual sync requested")
-            runCatching { refreshLibrariesUseCase() }
-                .onSuccess { driveDebugLogger.log("refresh_libraries_complete", "Manual sync completed") }
-                .onFailure { throwable -> driveDebugLogger.logError("refresh_libraries_failed", throwable) }
+            driveDebugLogger.log("refresh_libraries", "Manual Drive sync requested")
+            enqueueDriveLibraryRefreshUseCase()
         }
     }
 
@@ -265,8 +284,8 @@ class SettingsViewModel @Inject constructor(
                 )
                 folderPickerVisibleState.value = false
                 driveDebugLogger.log("select_drive_folder_complete", "Selected ${currentFolder.path}")
-                _events.emit(SettingsEvent.Message("Selected ${currentFolder.path}."))
-                launchBackgroundDriveSync()
+                enqueueDriveLibraryRefreshUseCase()
+                _events.emit(SettingsEvent.Message("Selected ${currentFolder.path}. Drive sync started in background."))
             }.onFailure { throwable ->
                 driveDebugLogger.logError("select_drive_folder_failed", throwable)
                 _events.emit(SettingsEvent.Message(throwable.message ?: "Could not select folder."))
@@ -316,20 +335,5 @@ class SettingsViewModel @Inject constructor(
         currentFolderState.value = FolderBrowserNode(id = ROOT_ID, path = ROOT_PATH)
         folderHistoryState.value = emptyList()
         driveFoldersState.value = emptyList()
-    }
-
-    private fun launchBackgroundDriveSync() {
-        viewModelScope.launch {
-            driveDebugLogger.log("background_drive_sync", "Starting Drive library refresh after folder selection")
-            runCatching { refreshLibrariesUseCase() }
-                .onSuccess {
-                    driveDebugLogger.log("background_drive_sync_complete", "Drive library refresh completed")
-                    _events.emit(SettingsEvent.Message("Drive library synced."))
-                }
-                .onFailure { throwable ->
-                    driveDebugLogger.logError("background_drive_sync_failed", throwable)
-                    _events.emit(SettingsEvent.Message(throwable.message ?: "Drive sync failed."))
-                }
-        }
     }
 }

@@ -35,17 +35,22 @@ class GoogleDriveMusicDataSource @Inject constructor(
         }
     }
 
-    override suspend fun fetchSongs(): List<Song> {
+    override suspend fun fetchSongs(onProgress: ((processedFileCount: Int) -> Unit)?): List<Song> {
         return withContext(Dispatchers.IO) {
             val settings = settingsRepository.observeSettings().first()
             val connection = settings.connectedDriveFolder ?: return@withContext emptyList()
             val accountEmail = connection.accountEmail ?: return@withContext emptyList()
             val token = getAccessToken(accountEmail)
+            var processedFileCount = 0
             querySongsRecursively(
                 folderId = connection.folderId.ifBlank { ROOT_ID },
                 folderPath = connection.folderName.ifBlank { "My Drive" },
                 accountEmail = accountEmail,
                 token = token,
+                onSongProcessed = {
+                    processedFileCount += 1
+                    onProgress?.invoke(processedFileCount)
+                },
             )
         }
     }
@@ -72,6 +77,7 @@ class GoogleDriveMusicDataSource @Inject constructor(
         folderPath: String,
         accountEmail: String,
         token: String,
+        onSongProcessed: () -> Unit,
     ): List<Song> {
         val children = driveListRequest(
             query = "'$folderId' in parents and trashed = false",
@@ -92,6 +98,7 @@ class GoogleDriveMusicDataSource @Inject constructor(
 
                 item.isSupportedAudioFile() -> {
                     songs += item.toSong(folderPath = folderPath, accountEmail = accountEmail, token = token)
+                    onSongProcessed()
                 }
             }
         }
@@ -102,6 +109,7 @@ class GoogleDriveMusicDataSource @Inject constructor(
                 folderPath = childPath,
                 accountEmail = accountEmail,
                 token = token,
+                onSongProcessed = onSongProcessed,
             )
         }
 

@@ -819,16 +819,23 @@ private fun SettingsScreen(
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    Text(
+                        state.driveSyncStatusText,
+                        color = if (state.isDriveSyncing) SpotifyGreen else SpotifyTextMuted,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
                 Button(
                     onClick = onRefresh,
-                    enabled = !state.isWorking && !state.isFolderLoading,
+                    enabled = !state.isWorking && !state.isFolderLoading && !state.isDriveSyncing,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = SpotifyGreen,
                         contentColor = SpotifyBackground,
                     ),
                 ) {
-                    Text("Sync")
+                    Text(if (state.isDriveSyncing) "Syncing..." else "Sync")
                 }
             }
         }

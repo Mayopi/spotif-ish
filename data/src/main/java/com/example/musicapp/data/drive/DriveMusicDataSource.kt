@@ -5,5 +5,5 @@ import com.example.musicapp.domain.model.Song
 
 interface DriveMusicDataSource {
     suspend fun listFolders(parentId: String, parentPath: String): List<DriveFolder>
-    suspend fun fetchSongs(): List<Song>
+    suspend fun fetchSongs(onProgress: ((processedFileCount: Int) -> Unit)? = null): List<Song>
 }
