@@ -1,5 +1,6 @@
 package com.example.musicapp.data.repository
 
+import android.util.Log
 import com.example.musicapp.core.DispatchersProvider
 import com.example.musicapp.data.local.LocalMusicDataSource
 import com.example.musicapp.data.network.SpotifishApi
@@ -173,7 +174,7 @@ class RemoteMusicRepository @Inject constructor(
         // Server search hits the canonical library; we still want client-side
         // filtering on local-only songs so they show up in search results too.
         return runCatching {
-            val remote = api.searchSongs(normalized).items.map { it.toDomain() }
+            val remote = api.searchSongs(normalized).safeItems.map { it.toDomain() }
             val local = localSongs.value.filter { song ->
                 val q = normalized.lowercase()
                 song.title.lowercase().contains(q) ||
@@ -203,8 +204,11 @@ class RemoteMusicRepository @Inject constructor(
         val collected = mutableListOf<Song>()
         var cursor: String? = null
         do {
-            val page = api.listSongs(cursor = cursor, limit = 200)
-            collected += page.items.map { it.toDomain() }
+            // Backend caps limit at 1000, which comfortably fits any realistic
+            // Spotifish library — keeps the polling refresh as a single round trip
+            // and avoids the broken cursor pagination path entirely.
+            val page = api.listSongs(cursor = cursor, limit = 1000)
+            collected += page.safeItems.map { it.toDomain() }
             cursor = page.nextCursor
         } while (cursor != null)
         remoteSongs.value = collected
@@ -218,10 +222,17 @@ class RemoteMusicRepository @Inject constructor(
         // pull a fresh page of songs on every poll instead of every Nth poll. The
         // user perceives synced songs landing in the library in near-real time
         // (~POLL_INTERVAL_MILLIS lag) rather than waiting for the whole job to
-        // finish. The cost is one extra `/v1/songs?limit=200` round trip per second.
+        // finish.
         var attempts = 0
         while (true) {
-            val status = runCatching { api.syncStatus() }.getOrNull() ?: break
+            val statusResult = runCatching { api.syncStatus() }
+            val status = statusResult.getOrNull()
+            if (status == null) {
+                statusResult.exceptionOrNull()?.let {
+                    Log.w(TAG, "syncStatus poll failed", it)
+                }
+                break
+            }
             driveSyncState.value = status.toDomain()
             // Stop polling on terminal states. 'paused' is also terminal from the
             // poll loop's perspective — the loop is restarted by resumeDriveLibraryRefresh.
@@ -229,13 +240,18 @@ class RemoteMusicRepository @Inject constructor(
             attempts += 1
             if (attempts > MAX_POLL_ATTEMPTS) break
             // Refresh the song list every poll so the snappy per-song progress on
-            // the backend translates into snappy per-poll updates here.
-            runCatching { fetchRemoteLibrary() }
+            // the backend translates into snappy per-poll updates here. Log any
+            // failure so the next time the response shape drifts we can spot it
+            // immediately in logcat instead of debugging by inference.
+            runCatching { fetchRemoteLibrary() }.onFailure {
+                Log.w(TAG, "fetchRemoteLibrary during sync poll failed: ${it.message}", it)
+            }
             delay(POLL_INTERVAL_MILLIS)
         }
     }
 
     private companion object {
+        private const val TAG = "RemoteMusicRepo"
         private const val POLL_INTERVAL_MILLIS = 1_500L
         private const val MAX_POLL_ATTEMPTS = 600 // 15 minutes at 1.5s intervals
     }

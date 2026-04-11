@@ -576,24 +576,29 @@ private fun ArtworkThumb(
     modifier: Modifier = Modifier,
 ) {
     val boxModifier = modifier.clip(RoundedCornerShape(6.dp))
-    if (song.albumArtUri != null) {
-        AsyncImage(
-            model = song.albumArtUri,
-            contentDescription = song.title,
-            modifier = boxModifier,
-            contentScale = ContentScale.Crop,
+    val gradient = gradientForSong(song)
+    val initial = song.title.take(1).ifBlank { song.artist.take(1) }.uppercase()
+
+    // Always render the gradient + initial as a placeholder underneath the image,
+    // so a failed Coil load (404, network blip, missing art file on the backend)
+    // doesn't leave an empty box. The AsyncImage paints over the placeholder once
+    // it successfully loads.
+    Box(
+        modifier = boxModifier.background(gradient),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = initial,
+            color = SpotifyWhite,
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Black,
         )
-    } else {
-        val gradient = gradientForSong(song)
-        Box(
-            modifier = boxModifier.background(gradient),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = song.title.take(1).ifBlank { song.artist.take(1) }.uppercase(),
-                color = SpotifyWhite,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Black,
+        if (song.albumArtUri != null) {
+            AsyncImage(
+                model = song.albumArtUri,
+                contentDescription = song.title,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
             )
         }
     }
