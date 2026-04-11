@@ -2,9 +2,6 @@ package com.example.musicapp.ui
 
 import android.app.Activity
 import android.widget.Toast
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.IntentSenderRequest
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -228,33 +225,29 @@ fun MusicApp() {
                         val viewModel = hiltViewModel<SettingsViewModel>()
                         val state by viewModel.screenState.collectAsStateWithLifecycle()
                         val context = LocalContext.current
-                        val activity = context.findActivity()
-                        val authorizationLauncher = rememberLauncherForActivityResult(
-                            contract = ActivityResultContracts.StartIntentSenderForResult(),
-                        ) { result ->
-                            if (activity != null) {
-                                viewModel.completeDriveAuthorization(activity, result.data)
-                            }
-                        }
-                        LaunchedEffect(viewModel.events, context, activity) {
+                        LaunchedEffect(viewModel.events, context) {
                             viewModel.events.collect { event ->
                                 when (event) {
-                                    is SettingsEvent.LaunchDriveAuthorization -> {
-                                        authorizationLauncher.launch(
-                                            IntentSenderRequest.Builder(event.pendingIntent.intentSender).build(),
-                                        )
-                                    }
-
                                     is SettingsEvent.Message -> {
                                         Toast.makeText(context, event.text, Toast.LENGTH_SHORT).show()
+                                    }
+                                    SettingsEvent.SignOut -> {
+                                        // No-op here: AuthGate at the root will swap
+                                        // to the SignInScreen as soon as the
+                                        // SessionStore clears.
                                     }
                                 }
                             }
                         }
                         SettingsScreen(
                             state = state,
-                            onConnectDrive = { activity?.let(viewModel::connectDrive) },
-                            onDisconnectDrive = { activity?.let(viewModel::disconnectDrive) },
+                            // Drive auth lives entirely on the backend now. The user
+                            // grants Drive scope at sign-in time (server auth code
+                            // includes the Drive scope), so the only "connect"
+                            // action remaining is signing out and back in. Disconnect
+                            // detaches the folder server-side without signing out.
+                            onConnectDrive = { /* no-op: granted at sign-in */ },
+                            onDisconnectDrive = viewModel::disconnectDrive,
                             onChooseFolder = viewModel::openFolderPicker,
                             onNavigateUpFolder = viewModel::navigateUpDriveFolders,
                             onDismissFolderPicker = viewModel::dismissFolderPicker,

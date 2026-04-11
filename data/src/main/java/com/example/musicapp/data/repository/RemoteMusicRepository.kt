@@ -1,0 +1,188 @@
+package com.example.musicapp.data.repository
+
+import com.example.musicapp.core.DispatchersProvider
+import com.example.musicapp.data.local.LocalMusicDataSource
+import com.example.musicapp.data.network.SpotifishApi
+import com.example.musicapp.data.network.dto.toDomain
+import com.example.musicapp.domain.model.DriveSyncState
+import com.example.musicapp.domain.model.HomeSection
+import com.example.musicapp.domain.model.Song
+import com.example.musicapp.domain.model.SourceType
+import com.example.musicapp.domain.repository.FavoritesRepository
+import com.example.musicapp.domain.repository.MusicRepository
+import javax.inject.Inject
+import javax.inject.Singleton
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+/**
+ * Remote-first implementation of [MusicRepository].
+ *
+ * The Drive sync, metadata extraction, album-art persistence, and library state are
+ * now all owned by the backend. This class:
+ *
+ * 1. Pulls the canonical library list from `GET /v1/songs`
+ * 2. Merges it with the device's local-scanned songs (since local scanning still
+ *    happens client-side per the locked-in decision in BACKEND_PRD §6 + §14)
+ * 3. Folds in favorites
+ * 4. Polls `GET /v1/sync/status` while a sync is running so the Settings UI can
+ *    show live progress without WebSockets
+ *
+ * The previous local Drive sync layer (DriveLibraryStore, DriveTokenStore,
+ * GoogleDriveMusicDataSource, DriveAuthSessionStore) is intentionally NOT a
+ * dependency here — that whole stack is being deleted in the same change set.
+ */
+@Singleton
+class RemoteMusicRepository @Inject constructor(
+    private val api: SpotifishApi,
+    private val localMusicDataSource: LocalMusicDataSource,
+    private val favoritesRepository: FavoritesRepository,
+    private val dispatchersProvider: DispatchersProvider,
+) : MusicRepository {
+
+    private val scope = CoroutineScope(SupervisorJob() + dispatchersProvider.io)
+    private val localSongs = MutableStateFlow<List<Song>>(emptyList())
+    private val remoteSongs = MutableStateFlow<List<Song>>(emptyList())
+    private val driveSyncState = MutableStateFlow(DriveSyncState())
+    private var syncPollJob: Job? = null
+
+    init {
+        scope.launch {
+            // Local MediaStore scan still runs every cold start.
+            refreshLocalLibrary()
+            // Pull whatever the backend currently knows about so the UI has data
+            // before any explicit sync runs.
+            runCatching { fetchRemoteLibrary() }
+        }
+    }
+
+    override fun observeAllSongs(): Flow<List<Song>> {
+        return combine(
+            localSongs,
+            remoteSongs,
+            favoritesRepository.observeFavorites(),
+        ) { local, remote, favorites ->
+            (local + remote)
+                .distinctBy { it.id }
+                .map { song -> song.copy(isFavorite = song.id in favorites) }
+                .sortedWith(compareBy<Song> { it.title.lowercase() }.thenBy { it.artist.lowercase() })
+        }
+    }
+
+    override fun observeHomeSections(): Flow<List<HomeSection>> {
+        return observeAllSongs().map { songs ->
+            listOf(
+                HomeSection("Recently Added", songs.sortedByDescending { it.addedAtEpochMillis }.take(12)),
+                HomeSection("Local Library", songs.filter { it.sourceType == SourceType.LOCAL }.take(12)),
+                HomeSection("Drive Library", songs.filter { it.sourceType == SourceType.DRIVE }.take(12)),
+                HomeSection("All Songs", songs.take(20)),
+            ).filter { it.songs.isNotEmpty() }
+        }
+    }
+
+    override fun observeDriveSyncState(): Flow<DriveSyncState> = driveSyncState
+
+    override suspend fun refreshLocalLibrary() {
+        localSongs.value = withContext(dispatchersProvider.io) {
+            localMusicDataSource.scan()
+        }
+    }
+
+    override suspend fun refreshDriveLibrary() {
+        // The actual Drive scan runs on the backend. From the client's POV "refresh"
+        // means: ask the server to enqueue a sync, then poll its status until done,
+        // and repull the song list at the end.
+        val response = api.runSync()
+        pollSyncStatus(jobId = response.syncJobId)
+        fetchRemoteLibrary()
+    }
+
+    override fun enqueueDriveLibraryRefresh() {
+        if (syncPollJob?.isActive == true) return
+        syncPollJob = scope.launch {
+            runCatching {
+                val response = api.runSync()
+                pollSyncStatus(jobId = response.syncJobId)
+                fetchRemoteLibrary()
+            }.onFailure { throwable ->
+                driveSyncState.value = DriveSyncState(
+                    isSyncing = false,
+                    lastError = throwable.message ?: "Sync failed.",
+                    lastSyncedSongCount = remoteSongs.value.size,
+                    processedFileCount = remoteSongs.value.size,
+                )
+            }
+        }
+    }
+
+    override suspend fun search(query: String): List<Song> {
+        val normalized = query.trim()
+        if (normalized.isBlank()) return observeAllSongs().map { it.take(20) }.first()
+        // Server search hits the canonical library; we still want client-side
+        // filtering on local-only songs so they show up in search results too.
+        return runCatching {
+            val remote = api.searchSongs(normalized).items.map { it.toDomain() }
+            val local = localSongs.value.filter { song ->
+                val q = normalized.lowercase()
+                song.title.lowercase().contains(q) ||
+                    song.artist.lowercase().contains(q) ||
+                    song.album.lowercase().contains(q)
+            }
+            (local + remote).distinctBy { it.id }
+        }.getOrElse {
+            // Network failure → fall back to local-only filter so the search still
+            // returns something usable.
+            observeAllSongs().map { songs ->
+                songs.filter { song ->
+                    val q = normalized.lowercase()
+                    song.title.lowercase().contains(q) ||
+                        song.artist.lowercase().contains(q) ||
+                        song.album.lowercase().contains(q)
+                }
+            }.first()
+        }
+    }
+
+    override suspend fun getSong(songId: String): Song? {
+        return observeAllSongs().map { songs -> songs.firstOrNull { it.id == songId } }.first()
+    }
+
+    private suspend fun fetchRemoteLibrary() {
+        val collected = mutableListOf<Song>()
+        var cursor: String? = null
+        do {
+            val page = api.listSongs(cursor = cursor, limit = 200)
+            collected += page.items.map { it.toDomain() }
+            cursor = page.nextCursor
+        } while (cursor != null)
+        remoteSongs.value = collected
+    }
+
+    private suspend fun pollSyncStatus(jobId: String) {
+        // Backend sync is async — poll its status flow into our DriveSyncState so the
+        // existing Settings sync card keeps working without changes.
+        var attempts = 0
+        while (true) {
+            val status = runCatching { api.syncStatus() }.getOrNull() ?: break
+            driveSyncState.value = status.toDomain()
+            if (status.state == "succeeded" || status.state == "failed") break
+            attempts += 1
+            if (attempts > MAX_POLL_ATTEMPTS) break
+            delay(POLL_INTERVAL_MILLIS)
+        }
+    }
+
+    private companion object {
+        private const val POLL_INTERVAL_MILLIS = 1_500L
+        private const val MAX_POLL_ATTEMPTS = 600 // 15 minutes at 1.5s intervals
+    }
+}

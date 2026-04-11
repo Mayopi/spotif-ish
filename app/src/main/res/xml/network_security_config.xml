@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Network security policy for Spotifish.
+
+  Default: HTTPS only for everything. The exceptions below are narrowly scoped to
+  hosts that legitimately need cleartext during local development:
+
+    - 10.0.2.2          : Android emulator loopback (your dev machine's localhost)
+    - 10.0.3.2          : Genymotion emulator loopback
+    - 127.0.0.1         : ADB reverse-tunnel mappings
+    - 192.168.0.0/16    : RFC1918 private LAN (Wi-Fi between phone and dev box)
+    - 72.60.193.243     : current dev backend host
+
+  When you put TLS in front of the backend (Caddy / nginx / Cloudflare proxy), drop
+  the explicit IP and switch SPOTIFISH_BASE_URL to https://.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">10.0.2.2</domain>
+        <domain includeSubdomains="true">10.0.3.2</domain>
+        <domain includeSubdomains="true">127.0.0.1</domain>
+        <domain includeSubdomains="true">localhost</domain>
+        <domain includeSubdomains="true">192.168.0.0</domain>
+        <domain includeSubdomains="true">72.60.193.243</domain>
+    </domain-config>
+</network-security-config>

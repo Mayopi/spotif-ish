@@ -2,14 +2,14 @@ package com.example.musicapp.data.di
 
 import com.example.musicapp.core.DefaultDispatchersProvider
 import com.example.musicapp.core.DispatchersProvider
-import com.example.musicapp.data.drive.DriveMusicDataSource
-import com.example.musicapp.data.drive.GoogleDriveMusicDataSource
+import com.example.musicapp.core.PlaybackTokenSource
+import com.example.musicapp.data.auth.SessionPlaybackTokenSource
 import com.example.musicapp.data.local.LocalMusicDataSource
 import com.example.musicapp.data.local.MediaStoreLocalMusicDataSource
-import com.example.musicapp.data.repository.DefaultDriveRepository
-import com.example.musicapp.data.repository.DefaultFavoritesRepository
-import com.example.musicapp.data.repository.DefaultMusicRepository
-import com.example.musicapp.data.repository.DefaultPlaylistRepository
+import com.example.musicapp.data.repository.RemoteDriveRepository
+import com.example.musicapp.data.repository.RemoteFavoritesRepository
+import com.example.musicapp.data.repository.RemoteMusicRepository
+import com.example.musicapp.data.repository.RemotePlaylistRepository
 import com.example.musicapp.data.repository.DefaultSettingsRepository
 import com.example.musicapp.domain.repository.DriveRepository
 import com.example.musicapp.domain.repository.FavoritesRepository
@@ -33,34 +33,34 @@ abstract class DataBindingsModule {
     ): LocalMusicDataSource
 
     @Binds
-    abstract fun bindDriveMusicDataSource(
-        implementation: GoogleDriveMusicDataSource,
-    ): DriveMusicDataSource
-
-    @Binds
     abstract fun bindDriveRepository(
-        implementation: DefaultDriveRepository,
+        implementation: RemoteDriveRepository,
     ): DriveRepository
 
     @Binds
     abstract fun bindMusicRepository(
-        implementation: DefaultMusicRepository,
+        implementation: RemoteMusicRepository,
     ): MusicRepository
 
     @Binds
     abstract fun bindFavoritesRepository(
-        implementation: DefaultFavoritesRepository,
+        implementation: RemoteFavoritesRepository,
     ): FavoritesRepository
 
     @Binds
     abstract fun bindPlaylistRepository(
-        implementation: DefaultPlaylistRepository,
+        implementation: RemotePlaylistRepository,
     ): PlaylistRepository
 
     @Binds
     abstract fun bindSettingsRepository(
         implementation: DefaultSettingsRepository,
     ): SettingsRepository
+
+    @Binds
+    abstract fun bindPlaybackTokenSource(
+        implementation: SessionPlaybackTokenSource,
+    ): PlaybackTokenSource
 }
 
 @Module
