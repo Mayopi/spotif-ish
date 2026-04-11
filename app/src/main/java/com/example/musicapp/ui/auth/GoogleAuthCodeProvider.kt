@@ -1,33 +1,33 @@
 package com.example.musicapp.ui.auth
 
 import android.app.Activity
+import androidx.credentials.CredentialManager
+import androidx.credentials.CustomCredential
+import androidx.credentials.GetCredentialRequest
+import androidx.credentials.exceptions.GetCredentialException
 import com.example.musicapp.BuildConfig
-import com.google.android.gms.auth.api.identity.AuthorizationRequest
-import com.google.android.gms.auth.api.identity.Identity
-import com.google.android.gms.common.api.Scope
-import com.google.android.gms.tasks.Tasks
+import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import javax.inject.Inject
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 class AuthFlowException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
 /**
- * Asks Google Identity Services for a **server-side OAuth authorization code** that
- * the backend can exchange for both an ID token (to identify the user) and a Drive
- * refresh token (to scan the user's library on the user's behalf).
+ * Asks Google to issue a **Google ID token** for the signed-in user.
  *
- * The Drive scope is requested **at sign-in time** so the backend gets the refresh
- * token in the same handshake — no separate "Connect Drive" UI flow needed
- * post-sign-in.
+ * The Spotifish backend's `POST /v1/auth/google` handler expects an ID token (which
+ * it verifies against Google's JWKS via `idtoken.Validate`), NOT a server-side OAuth
+ * authorization code. We use the Credential Manager flow with `GetSignInWithGoogleOption`,
+ * which surfaces the system account picker and returns a `GoogleIdTokenCredential`
+ * once the user picks an account — no server-side OAuth code exchange needed.
  *
- * Requires `GOOGLE_WEB_CLIENT_ID` to be set in the project's `.env` file (it's
- * already wired into BuildConfig). The same OAuth client must also be configured on
- * the backend so it can exchange the auth code at `/v1/auth/google`.
+ * Drive scope is granted **separately** by the backend later (server-side OAuth on
+ * its own callback URL); the client doesn't ask for it here, so the original
+ * `requestOfflineAccess(...)` call is gone.
  */
-class GoogleAuthCodeProvider @Inject constructor() {
+class GoogleSignInProvider @Inject constructor() {
 
-    suspend fun requestServerAuthCode(activity: Activity): String {
+    suspend fun requestIdToken(activity: Activity): String {
         val clientId = BuildConfig.GOOGLE_WEB_CLIENT_ID
         if (clientId.isBlank()) {
             throw AuthFlowException(
@@ -35,48 +35,22 @@ class GoogleAuthCodeProvider @Inject constructor() {
             )
         }
 
-        val request = AuthorizationRequest.builder()
-            .setRequestedScopes(
-                listOf(
-                    Scope("openid"),
-                    Scope("email"),
-                    Scope("profile"),
-                    Scope("https://www.googleapis.com/auth/drive.readonly"),
-                ),
-            )
-            // Asks Google for a one-shot auth code that the backend will exchange.
-            // forceCodeForRefreshToken = true ensures the backend always gets a
-            // refresh token, even on subsequent sign-ins.
-            .requestOfflineAccess(clientId, /* forceCodeForRefreshToken = */ true)
+        val credentialManager = CredentialManager.create(activity)
+        val signInOption = GetSignInWithGoogleOption.Builder(clientId).build()
+        val request = GetCredentialRequest.Builder()
+            .addCredentialOption(signInOption)
             .build()
 
-        val result = withContext(Dispatchers.IO) {
-            Tasks.await(Identity.getAuthorizationClient(activity).authorize(request))
+        val result = try {
+            credentialManager.getCredential(context = activity, request = request)
+        } catch (e: GetCredentialException) {
+            throw AuthFlowException(e.message ?: "Google sign-in was cancelled.", e)
         }
 
-        if (result.hasResolution()) {
-            // We need to launch the consent UI. The activity is required to show
-            // the resolution intent — UI layer is responsible for catching this and
-            // launching the IntentSender.
-            throw NeedsResolutionException(
-                pendingIntent = result.pendingIntent
-                    ?: throw AuthFlowException("Authorization needs resolution but no PendingIntent was returned."),
-            )
-        }
+        val customCredential = result.credential as? CustomCredential
+            ?: throw AuthFlowException("Google sign-in did not return a Google credential.")
 
-        return result.serverAuthCode
-            ?: throw AuthFlowException("Google did not return a server auth code. Is offline access configured?")
-    }
-
-    suspend fun completeFromIntent(activity: Activity, data: android.content.Intent?): String {
-        val result = withContext(Dispatchers.IO) {
-            Identity.getAuthorizationClient(activity).getAuthorizationResultFromIntent(data)
-        }
-        return result.serverAuthCode
-            ?: throw AuthFlowException("Google did not return a server auth code after consent.")
+        val googleCredential = GoogleIdTokenCredential.createFrom(customCredential.data)
+        return googleCredential.idToken
     }
 }
-
-class NeedsResolutionException(
-    val pendingIntent: android.app.PendingIntent,
-) : Exception("Needs user consent")

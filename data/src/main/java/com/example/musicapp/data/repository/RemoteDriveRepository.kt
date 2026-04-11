@@ -19,7 +19,7 @@ class RemoteDriveRepository @Inject constructor(
         return withContext(dispatchersProvider.io) {
             api.listDriveFolders(parentId = parentId.takeIf { it.isNotBlank() && it != "root" })
                 .folders
-                .map { it.toDomain() }
+                .map { it.toDomain(parentPath = parentPath) }
         }
     }
 }

@@ -2,6 +2,9 @@ package com.example.musicapp.ui
 
 import android.app.Activity
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -225,6 +228,14 @@ fun MusicApp() {
                         val viewModel = hiltViewModel<SettingsViewModel>()
                         val state by viewModel.screenState.collectAsStateWithLifecycle()
                         val context = LocalContext.current
+                        val activity = context.findActivity()
+                        // Receives the result of the Drive consent screen launched
+                        // by the IntentSender below, and resumes the connect flow.
+                        val driveConsentLauncher = rememberLauncherForActivityResult(
+                            contract = ActivityResultContracts.StartIntentSenderForResult(),
+                        ) { result ->
+                            activity?.let { viewModel.completeDriveConnect(it, result.data) }
+                        }
                         LaunchedEffect(viewModel.events, context) {
                             viewModel.events.collect { event ->
                                 when (event) {
@@ -236,17 +247,19 @@ fun MusicApp() {
                                         // to the SignInScreen as soon as the
                                         // SessionStore clears.
                                     }
+                                    is SettingsEvent.LaunchDriveConsent -> {
+                                        driveConsentLauncher.launch(
+                                            IntentSenderRequest.Builder(
+                                                event.pendingIntent.intentSender,
+                                            ).build(),
+                                        )
+                                    }
                                 }
                             }
                         }
                         SettingsScreen(
                             state = state,
-                            // Drive auth lives entirely on the backend now. The user
-                            // grants Drive scope at sign-in time (server auth code
-                            // includes the Drive scope), so the only "connect"
-                            // action remaining is signing out and back in. Disconnect
-                            // detaches the folder server-side without signing out.
-                            onConnectDrive = { /* no-op: granted at sign-in */ },
+                            onConnectDrive = { activity?.let(viewModel::connectDrive) },
                             onDisconnectDrive = viewModel::disconnectDrive,
                             onChooseFolder = viewModel::openFolderPicker,
                             onNavigateUpFolder = viewModel::navigateUpDriveFolders,

@@ -4,13 +4,16 @@ import com.example.musicapp.data.network.dto.AddSongRequest
 import com.example.musicapp.data.network.dto.AlbumGroupDto
 import com.example.musicapp.data.network.dto.ArtistGroupDto
 import com.example.musicapp.data.network.dto.AuthTokenPair
+import com.example.musicapp.data.network.dto.ConnectDriveRequest
 import com.example.musicapp.data.network.dto.CreatePlaylistRequest
 import com.example.musicapp.data.network.dto.DriveFolderListDto
 import com.example.musicapp.data.network.dto.GoogleSignInRequest
 import com.example.musicapp.data.network.dto.HomeResponseDto
 import com.example.musicapp.data.network.dto.PlaylistDto
 import com.example.musicapp.data.network.dto.RefreshTokenRequest
+import com.example.musicapp.data.network.dto.RefreshedTokenPair
 import com.example.musicapp.data.network.dto.RenamePlaylistRequest
+import com.example.musicapp.data.network.dto.SignOutRequest
 import com.example.musicapp.data.network.dto.ReorderSongsRequest
 import com.example.musicapp.data.network.dto.SetDriveFolderRequest
 import com.example.musicapp.data.network.dto.SongDto
@@ -44,12 +47,15 @@ interface SpotifishApi {
 
     @NoAuth
     @POST("v1/auth/refresh")
-    suspend fun refresh(@Body request: RefreshTokenRequest): AuthTokenPair
+    suspend fun refresh(@Body request: RefreshTokenRequest): RefreshedTokenPair
 
     @POST("v1/auth/sign-out")
-    suspend fun signOut()
+    suspend fun signOut(@Body request: SignOutRequest)
 
     // -------------------- Drive connection --------------------
+
+    @POST("v1/drive/connect")
+    suspend fun connectDrive(@Body request: ConnectDriveRequest)
 
     @GET("v1/drive/folders")
     suspend fun listDriveFolders(

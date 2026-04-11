@@ -22,7 +22,10 @@ data class SyncRunResponse(
 data class DriveFolderDto(
     val id: String,
     val name: String,
-    val path: String,
+    // The backend (`model.DriveFolderInfo`) does NOT carry a path, so this is
+    // optional. The client computes a display path locally by chaining parent
+    // folder names during browsing.
+    val path: String? = null,
 )
 
 @Serializable
@@ -36,6 +39,17 @@ data class SetDriveFolderRequest(
     val folderName: String,
 )
 
+/**
+ * Body for `POST /v1/drive/connect`. The backend's handler exchanges this with
+ * Google via `oauthConfig.Exchange(...)` to obtain Drive access + refresh tokens,
+ * then encrypts and stores them. Field name MUST match
+ * `internal/handler/drive_handler.go:23`.
+ */
+@Serializable
+data class ConnectDriveRequest(
+    val authCode: String,
+)
+
 fun SyncStatusDto.toDomain(): DriveSyncState = DriveSyncState(
     isSyncing = state == "queued" || state == "running",
     lastError = lastError,
@@ -43,8 +57,9 @@ fun SyncStatusDto.toDomain(): DriveSyncState = DriveSyncState(
     processedFileCount = processedCount,
 )
 
-fun DriveFolderDto.toDomain(): DriveFolder = DriveFolder(
+fun DriveFolderDto.toDomain(parentPath: String): DriveFolder = DriveFolder(
     id = id,
     name = name,
-    path = path,
+    // Compose a display path from the parent we're currently browsing.
+    path = if (parentPath.isBlank()) name else "$parentPath/$name",
 )

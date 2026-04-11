@@ -1,9 +1,12 @@
 package com.example.musicapp.ui.settings
 
+import android.app.Activity
+import android.content.Intent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.musicapp.data.auth.AuthRepository
 import com.example.musicapp.data.network.SpotifishApi
+import com.example.musicapp.data.network.dto.ConnectDriveRequest
 import com.example.musicapp.data.network.dto.SetDriveFolderRequest
 import com.example.musicapp.data.network.dto.toDomain
 import com.example.musicapp.domain.model.DriveFolder
@@ -12,6 +15,8 @@ import com.example.musicapp.domain.usecase.EnqueueDriveLibraryRefreshUseCase
 import com.example.musicapp.domain.usecase.ObserveDriveSyncStateUseCase
 import com.example.musicapp.domain.usecase.ObserveSettingsUseCase
 import com.example.musicapp.domain.usecase.UpdateDriveFolderUseCase
+import com.example.musicapp.ui.auth.DriveAuthorizationResult
+import com.example.musicapp.ui.auth.GoogleDriveAuthorizationProvider
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -43,6 +48,9 @@ data class SettingsUiState(
 sealed interface SettingsEvent {
     data class Message(val text: String) : SettingsEvent
     object SignOut : SettingsEvent
+
+    /** Drive consent screen needs to be shown via an IntentSender. */
+    data class LaunchDriveConsent(val pendingIntent: android.app.PendingIntent) : SettingsEvent
 }
 
 /**
@@ -67,6 +75,7 @@ class SettingsViewModel @Inject constructor(
     private val updateDriveFolderUseCase: UpdateDriveFolderUseCase,
     private val api: SpotifishApi,
     private val authRepository: AuthRepository,
+    private val driveAuthProvider: GoogleDriveAuthorizationProvider,
 ) : ViewModel() {
 
     private data class FolderBrowserNode(
@@ -172,6 +181,61 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Kicks off the Drive grant flow. Asks Identity Services for a server-side OAuth
+     * authorization code with the `drive.readonly` scope. If consent is already
+     * granted, the code is posted to `POST /v1/drive/connect` immediately. Otherwise
+     * the UI is asked to launch the consent intent, and [completeDriveConnect]
+     * resumes the flow.
+     */
+    fun connectDrive(activity: Activity) {
+        viewModelScope.launch {
+            if (workingState.value) return@launch
+            workingState.value = true
+            runCatching {
+                when (val result = driveAuthProvider.requestServerAuthCode(activity)) {
+                    is DriveAuthorizationResult.Authorized -> postAuthCodeToBackend(result.serverAuthCode)
+                    is DriveAuthorizationResult.NeedsConsent -> {
+                        _events.emit(SettingsEvent.LaunchDriveConsent(result.pendingIntent))
+                    }
+                }
+            }.onFailure { throwable ->
+                workingState.value = false
+                _events.emit(SettingsEvent.Message(throwable.message ?: "Could not start Drive connect."))
+            }
+        }
+    }
+
+    /**
+     * Continuation of [connectDrive] after the user has granted consent through the
+     * IntentSender. Reads the server auth code out of the returned intent and posts
+     * it to the backend.
+     */
+    fun completeDriveConnect(activity: Activity, data: Intent?) {
+        viewModelScope.launch {
+            runCatching {
+                val code = driveAuthProvider.completeFromIntent(activity, data)
+                postAuthCodeToBackend(code)
+            }.onFailure { throwable ->
+                workingState.value = false
+                _events.emit(SettingsEvent.Message(throwable.message ?: "Drive consent was cancelled."))
+            }
+        }
+    }
+
+    private suspend fun postAuthCodeToBackend(authCode: String) {
+        api.connectDrive(ConnectDriveRequest(authCode = authCode))
+        workingState.value = false
+        _events.emit(
+            SettingsEvent.Message("Google Drive connected. Choose a folder to import music."),
+        )
+        // Drive credentials are now stored on the backend, but no folder has been
+        // selected yet — `isDriveConnected` (which is folder-based) is still false,
+        // so the "Browse" button stays disabled. Auto-open the folder picker so the
+        // user can immediately choose a folder without hitting a dead-end.
+        openFolderPicker()
+    }
+
     fun openFolderPicker() {
         viewModelScope.launch {
             runCatching {
@@ -259,7 +323,7 @@ class SettingsViewModel @Inject constructor(
             val currentFolder = currentFolderState.value
             driveFoldersState.value = api.listDriveFolders(parentId = currentFolder.id.takeIf { it != ROOT_ID })
                 .folders
-                .map { it.toDomain() }
+                .map { it.toDomain(parentPath = currentFolder.path) }
         } finally {
             folderLoadingState.value = false
         }

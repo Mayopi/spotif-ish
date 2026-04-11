@@ -1,9 +1,6 @@
 package com.example.musicapp.ui.auth
 
 import android.app.Activity
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.IntentSenderRequest
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -23,7 +20,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -48,24 +44,6 @@ fun SignInScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val activity = context.findActivity()
-
-    val resolutionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartIntentSenderForResult(),
-    ) { result ->
-        viewModel.completeResolution(result.data)
-    }
-
-    LaunchedEffect(viewModel.events) {
-        viewModel.events.collect { event ->
-            when (event) {
-                is SignInEvent.LaunchResolution -> {
-                    resolutionLauncher.launch(
-                        IntentSenderRequest.Builder(event.pendingIntent.intentSender).build(),
-                    )
-                }
-            }
-        }
-    }
 
     Surface(
         modifier = Modifier.fillMaxSize(),
