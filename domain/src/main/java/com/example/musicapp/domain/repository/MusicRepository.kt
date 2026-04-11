@@ -12,6 +12,8 @@ interface MusicRepository {
     suspend fun refreshLocalLibrary()
     suspend fun refreshDriveLibrary()
     fun enqueueDriveLibraryRefresh()
+    fun pauseDriveLibraryRefresh()
+    fun resumeDriveLibraryRefresh()
     suspend fun search(query: String): List<Song>
     suspend fun getSong(songId: String): Song?
 }

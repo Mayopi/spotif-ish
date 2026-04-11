@@ -6,7 +6,8 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class SyncStatusDto(
-    val state: String, // "idle" | "queued" | "running" | "succeeded" | "failed"
+    // "none" | "queued" | "running" | "paused" | "succeeded" | "failed"
+    val state: String,
     val processedCount: Int = 0,
     val totalCount: Int? = null,
     val lastError: String? = null,
@@ -16,6 +17,9 @@ data class SyncStatusDto(
 @Serializable
 data class SyncRunResponse(
     val syncJobId: String,
+    // Backend's handler also returns the current state ("queued" / "paused" / etc.)
+    // but we don't need to do anything with it on the client.
+    val state: String? = null,
 )
 
 @Serializable
@@ -52,6 +56,7 @@ data class ConnectDriveRequest(
 
 fun SyncStatusDto.toDomain(): DriveSyncState = DriveSyncState(
     isSyncing = state == "queued" || state == "running",
+    isPaused = state == "paused",
     lastError = lastError,
     lastSyncedSongCount = totalCount ?: 0,
     processedFileCount = processedCount,

@@ -124,6 +124,49 @@ class RemoteMusicRepository @Inject constructor(
         }
     }
 
+    override fun pauseDriveLibraryRefresh() {
+        scope.launch {
+            runCatching {
+                val response = api.pauseSync()
+                // Reflect the pause locally before the next poll lands so the UI
+                // flips immediately. The poll loop will catch up on the next tick
+                // and overwrite this with the persisted backend state.
+                driveSyncState.value = driveSyncState.value.copy(
+                    isSyncing = false,
+                    isPaused = true,
+                )
+                // Stop the active poll loop — it'll be restarted by the resume call.
+                syncPollJob?.cancel()
+                syncPollJob = null
+                response // unused, but keeps the runCatching shape consistent
+            }.onFailure { throwable ->
+                driveSyncState.value = driveSyncState.value.copy(
+                    lastError = throwable.message ?: "Pause failed.",
+                )
+            }
+        }
+    }
+
+    override fun resumeDriveLibraryRefresh() {
+        if (syncPollJob?.isActive == true) return
+        syncPollJob = scope.launch {
+            runCatching {
+                val response = api.resumeSync()
+                driveSyncState.value = driveSyncState.value.copy(
+                    isSyncing = true,
+                    isPaused = false,
+                )
+                pollSyncStatus(jobId = response.syncJobId)
+                fetchRemoteLibrary()
+            }.onFailure { throwable ->
+                driveSyncState.value = driveSyncState.value.copy(
+                    isSyncing = false,
+                    lastError = throwable.message ?: "Resume failed.",
+                )
+            }
+        }
+    }
+
     override suspend fun search(query: String): List<Song> {
         val normalized = query.trim()
         if (normalized.isBlank()) return observeAllSongs().map { it.take(20) }.first()
@@ -170,13 +213,24 @@ class RemoteMusicRepository @Inject constructor(
     private suspend fun pollSyncStatus(jobId: String) {
         // Backend sync is async — poll its status flow into our DriveSyncState so the
         // existing Settings sync card keeps working without changes.
+        //
+        // Now that the backend persists processed_count after every song, we can
+        // pull a fresh page of songs on every poll instead of every Nth poll. The
+        // user perceives synced songs landing in the library in near-real time
+        // (~POLL_INTERVAL_MILLIS lag) rather than waiting for the whole job to
+        // finish. The cost is one extra `/v1/songs?limit=200` round trip per second.
         var attempts = 0
         while (true) {
             val status = runCatching { api.syncStatus() }.getOrNull() ?: break
             driveSyncState.value = status.toDomain()
-            if (status.state == "succeeded" || status.state == "failed") break
+            // Stop polling on terminal states. 'paused' is also terminal from the
+            // poll loop's perspective — the loop is restarted by resumeDriveLibraryRefresh.
+            if (status.state == "succeeded" || status.state == "failed" || status.state == "paused") break
             attempts += 1
             if (attempts > MAX_POLL_ATTEMPTS) break
+            // Refresh the song list every poll so the snappy per-song progress on
+            // the backend translates into snappy per-poll updates here.
+            runCatching { fetchRemoteLibrary() }
             delay(POLL_INTERVAL_MILLIS)
         }
     }

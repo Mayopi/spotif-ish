@@ -5,6 +5,8 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -185,6 +187,14 @@ fun MusicApp() {
                     navController = navController,
                     startDestination = TopLevelDestination.HOME.route,
                     modifier = Modifier.padding(paddingValues),
+                    // Tab switching should feel instant. Compose Navigation's
+                    // default fade-in/fade-out adds ~200ms of perceived latency
+                    // on every bottom-bar tap, which is most of the cost of
+                    // moving between Home/Search/Library/Player/Settings.
+                    enterTransition = { EnterTransition.None },
+                    exitTransition = { ExitTransition.None },
+                    popEnterTransition = { EnterTransition.None },
+                    popExitTransition = { ExitTransition.None },
                 ) {
                     composable(TopLevelDestination.HOME.route) {
                         val viewModel = hiltViewModel<HomeViewModel>()
@@ -267,6 +277,8 @@ fun MusicApp() {
                             onOpenFolder = viewModel::navigateIntoDriveFolder,
                             onSelectCurrentFolder = viewModel::selectCurrentDriveFolder,
                             onRefresh = viewModel::refreshLibraries,
+                            onPauseSync = viewModel::pauseSync,
+                            onResumeSync = viewModel::resumeSync,
                         )
                     }
                 }
@@ -1396,6 +1408,8 @@ private fun SettingsScreen(
     onOpenFolder: (DriveFolder) -> Unit,
     onSelectCurrentFolder: () -> Unit,
     onRefresh: () -> Unit,
+    onPauseSync: () -> Unit,
+    onResumeSync: () -> Unit,
 ) {
     LazyColumn(
         modifier = Modifier
@@ -1414,7 +1428,7 @@ private fun SettingsScreen(
         }
         item { DriveProfileCard(state) }
         item { DriveAccessCard(state, onConnectDrive, onDisconnectDrive, onChooseFolder) }
-        item { DriveSyncCard(state, onRefresh) }
+        item { DriveSyncCard(state, onRefresh, onPauseSync, onResumeSync) }
         item { ImportedRootsCard(state) }
     }
 
@@ -1570,6 +1584,8 @@ private fun DriveAccessCard(
 private fun DriveSyncCard(
     state: com.example.musicapp.ui.settings.SettingsUiState,
     onRefresh: () -> Unit,
+    onPauseSync: () -> Unit,
+    onResumeSync: () -> Unit,
 ) {
     Card(
         colors = CardDefaults.cardColors(containerColor = SpotifyCard),
@@ -1581,46 +1597,78 @@ private fun DriveSyncCard(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    "Selected root",
+                    color = SpotifyWhite,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    state.connectedDriveFolderName,
+                    color = SpotifyTextMuted,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+
+            // Action row swaps Sync / Pause / Resume based on current state. The
+            // Pause button only appears mid-sync; Resume only when the latest
+            // sync job is paused; otherwise the primary action is Sync.
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
-                ) {
-                    Text(
-                        "Selected root",
-                        color = SpotifyWhite,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Text(
-                        state.connectedDriveFolderName,
-                        color = SpotifyTextMuted,
-                        style = MaterialTheme.typography.bodySmall,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                Button(
-                    onClick = onRefresh,
-                    enabled = !state.isWorking && !state.isFolderLoading && !state.isDriveSyncing,
-                    shape = RoundedCornerShape(999.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = SpotifyGreen,
-                        contentColor = SpotifyBackground,
-                    ),
-                ) {
-                    Text(
-                        text = if (state.isDriveSyncing) "Syncing..." else "Sync",
-                        fontWeight = FontWeight.Bold,
-                    )
+                when {
+                    state.isDriveSyncing -> {
+                        Button(
+                            onClick = onPauseSync,
+                            enabled = !state.isWorking,
+                            shape = RoundedCornerShape(999.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = SpotifyMuted.copy(alpha = 0.35f),
+                                contentColor = SpotifyWhite,
+                            ),
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text("Pause", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    state.isDrivePaused -> {
+                        Button(
+                            onClick = onResumeSync,
+                            enabled = !state.isWorking,
+                            shape = RoundedCornerShape(999.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = SpotifyGreen,
+                                contentColor = SpotifyBackground,
+                            ),
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text("Resume sync", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    else -> {
+                        Button(
+                            onClick = onRefresh,
+                            enabled = !state.isWorking && !state.isFolderLoading,
+                            shape = RoundedCornerShape(999.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = SpotifyGreen,
+                                contentColor = SpotifyBackground,
+                            ),
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text("Sync", fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
             }
-            // Live sync progress — updates in real time as each song streams in from
-            // GoogleDriveMusicDataSource via DefaultMusicRepository.
+
+            // Live sync progress — updates whenever the backend's per-song progress
+            // counter advances (the Android client polls /v1/sync/status every
+            // ~1.5s and refreshes the song list on the same cadence).
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -1634,19 +1682,24 @@ private fun DriveSyncCard(
                 }
                 Text(
                     text = state.driveSyncStatusText,
-                    color = if (state.isDriveSyncing) SpotifyGreen else SpotifyTextMuted,
+                    color = when {
+                        state.isDriveSyncing -> SpotifyGreen
+                        state.isDrivePaused -> SpotifyWhite
+                        else -> SpotifyTextMuted
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            if (state.isDriveSyncing) {
+
+            if (state.isDriveSyncing || state.isDrivePaused) {
                 LinearProgressIndicator(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(4.dp)
                         .clip(RoundedCornerShape(2.dp)),
-                    color = SpotifyGreen,
+                    color = if (state.isDrivePaused) SpotifyMuted else SpotifyGreen,
                     trackColor = SpotifyGreen.copy(alpha = 0.2f),
                 )
             }

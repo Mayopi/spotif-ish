@@ -73,6 +73,12 @@ interface SpotifishApi {
     @POST("v1/sync/run")
     suspend fun runSync(): SyncRunResponse
 
+    @POST("v1/sync/pause")
+    suspend fun pauseSync(): SyncRunResponse
+
+    @POST("v1/sync/resume")
+    suspend fun resumeSync(): SyncRunResponse
+
     @GET("v1/sync/status")
     suspend fun syncStatus(): SyncStatusDto
 

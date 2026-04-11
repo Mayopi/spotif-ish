@@ -14,6 +14,8 @@ import com.example.musicapp.domain.model.FolderConnection
 import com.example.musicapp.domain.usecase.EnqueueDriveLibraryRefreshUseCase
 import com.example.musicapp.domain.usecase.ObserveDriveSyncStateUseCase
 import com.example.musicapp.domain.usecase.ObserveSettingsUseCase
+import com.example.musicapp.domain.usecase.PauseDriveLibraryRefreshUseCase
+import com.example.musicapp.domain.usecase.ResumeDriveLibraryRefreshUseCase
 import com.example.musicapp.domain.usecase.UpdateDriveFolderUseCase
 import com.example.musicapp.ui.auth.DriveAuthorizationResult
 import com.example.musicapp.ui.auth.GoogleDriveAuthorizationProvider
@@ -38,6 +40,7 @@ data class SettingsUiState(
     val isWorking: Boolean = false,
     val isFolderLoading: Boolean = false,
     val isDriveSyncing: Boolean = false,
+    val isDrivePaused: Boolean = false,
     val driveSyncStatusText: String = "Idle",
     val availableDriveFolders: List<DriveFolder> = emptyList(),
     val isFolderPickerVisible: Boolean = false,
@@ -72,6 +75,8 @@ class SettingsViewModel @Inject constructor(
     observeSettingsUseCase: ObserveSettingsUseCase,
     private val observeDriveSyncStateUseCase: ObserveDriveSyncStateUseCase,
     private val enqueueDriveLibraryRefreshUseCase: EnqueueDriveLibraryRefreshUseCase,
+    private val pauseDriveLibraryRefreshUseCase: PauseDriveLibraryRefreshUseCase,
+    private val resumeDriveLibraryRefreshUseCase: ResumeDriveLibraryRefreshUseCase,
     private val updateDriveFolderUseCase: UpdateDriveFolderUseCase,
     private val api: SpotifishApi,
     private val authRepository: AuthRepository,
@@ -116,7 +121,11 @@ class SettingsViewModel @Inject constructor(
     ) { ui, syncState ->
         ui.copy(
             isDriveSyncing = syncState.isSyncing,
+            isDrivePaused = syncState.isPaused,
             driveSyncStatusText = when {
+                syncState.isPaused ->
+                    "Paused at ${syncState.processedFileCount}" +
+                        (syncState.lastSyncedSongCount.takeIf { it > 0 }?.let { " of $it" } ?: "")
                 syncState.isSyncing -> "${syncState.processedFileCount} files processed"
                 !syncState.lastError.isNullOrBlank() -> syncState.lastError.orEmpty()
                 syncState.lastSyncedSongCount > 0 -> "${syncState.lastSyncedSongCount} tracks synced"
@@ -155,6 +164,14 @@ class SettingsViewModel @Inject constructor(
 
     fun refreshLibraries() {
         viewModelScope.launch { enqueueDriveLibraryRefreshUseCase() }
+    }
+
+    fun pauseSync() {
+        viewModelScope.launch { pauseDriveLibraryRefreshUseCase() }
+    }
+
+    fun resumeSync() {
+        viewModelScope.launch { resumeDriveLibraryRefreshUseCase() }
     }
 
     fun signOut() {
