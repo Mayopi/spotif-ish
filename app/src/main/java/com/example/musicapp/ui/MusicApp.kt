@@ -649,18 +649,9 @@ private fun SpotifishBottomBar(
                         contentDescription = destination.label,
                     )
                 },
-                label = {
-                    Text(
-                        text = destination.label,
-                        maxLines = 1,
-                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                    )
-                },
                 colors = NavigationBarItemDefaults.colors(
                     selectedIconColor = SpotifyWhite,
-                    selectedTextColor = SpotifyWhite,
                     unselectedIconColor = SpotifyTextMuted,
-                    unselectedTextColor = SpotifyTextMuted,
                     indicatorColor = Color.Transparent,
                 ),
             )
