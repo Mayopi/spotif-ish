@@ -24,7 +24,6 @@ class PlaybackService : MediaSessionService() {
     override fun onDestroy() {
         mediaSession?.release()
         mediaSession = null
-        playbackController.release()
         super.onDestroy()
     }
 }

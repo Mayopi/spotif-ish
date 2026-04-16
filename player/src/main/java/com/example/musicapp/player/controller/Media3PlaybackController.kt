@@ -52,13 +52,30 @@ class Media3PlaybackController @Inject constructor(
     private var currentQueue = emptyList<Song>()
     private val controllerScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var positionTicker: Job? = null
+    @Volatile private var released = false
 
     private val httpDataSourceFactory: DefaultHttpDataSource.Factory =
         DefaultHttpDataSource.Factory().apply {
-            // Auth header is set per-request below via setDefaultRequestProperties().
-            // We refresh it on every play() so newly minted tokens propagate.
             setAllowCrossProtocolRedirects(true)
         }
+
+    private val listener = object : Player.Listener {
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            if (released) return
+            publishState()
+            if (isPlaying) startPositionTicker() else stopPositionTicker()
+        }
+
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            if (released) return
+            publishState()
+        }
+
+        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            if (released) return
+            publishState()
+        }
+    }
 
     private val exoPlayer: ExoPlayer = ExoPlayer.Builder(appContext)
         .setMediaSourceFactory(
@@ -68,18 +85,7 @@ class Media3PlaybackController @Inject constructor(
                 ),
         )
         .build()
-        .also { it.addListener(playerListener()) }
-
-    private fun playerListener() = object : Player.Listener {
-        override fun onIsPlayingChanged(isPlaying: Boolean) {
-            publishState()
-            if (isPlaying) startPositionTicker() else stopPositionTicker()
-        }
-
-        override fun onPlaybackStateChanged(playbackState: Int) = publishState()
-
-        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) = publishState()
-    }
+        .also { it.addListener(listener) }
 
     private fun startPositionTicker() {
         if (positionTicker?.isActive == true) return
@@ -99,51 +105,64 @@ class Media3PlaybackController @Inject constructor(
     override fun observeState() = state.asStateFlow()
 
     override suspend fun play(song: Song, queue: List<Song>) {
-        currentQueue = queue
-        val startIndex = queue.indexOfFirst { it.id == song.id }.coerceAtLeast(0)
+        if (released) return
+        runCatching {
+            currentQueue = queue
+            val startIndex = queue.indexOfFirst { it.id == song.id }.coerceAtLeast(0)
 
-        // Stamp the current bearer onto the HTTP factory before playback starts so
-        // every range request to the backend's stream proxy is authorized. We don't
-        // bother filtering by host here — the only HTTP source the player ever hits
-        // in this app is the backend itself.
-        val token = tokenSource.currentAccessToken()
-        if (!token.isNullOrBlank()) {
-            httpDataSourceFactory.setDefaultRequestProperties(
-                mapOf("Authorization" to "Bearer $token"),
-            )
+            val token = tokenSource.currentAccessToken()
+            if (!token.isNullOrBlank()) {
+                httpDataSourceFactory.setDefaultRequestProperties(
+                    mapOf("Authorization" to "Bearer $token"),
+                )
+            }
+
+            exoPlayer.setMediaItems(queue.map(::toMediaItem), startIndex, 0L)
+            exoPlayer.prepare()
+            exoPlayer.playWhenReady = true
+            startPlaybackServiceIfNeeded()
+            publishState()
         }
-
-        exoPlayer.setMediaItems(queue.map(::toMediaItem), startIndex, 0L)
-        exoPlayer.prepare()
-        exoPlayer.playWhenReady = true
-        startPlaybackServiceIfNeeded()
-        publishState()
     }
 
     override suspend fun togglePlayPause() {
-        if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
-        publishState()
+        if (released) return
+        runCatching {
+            if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
+            publishState()
+        }
     }
 
     override suspend fun skipNext() {
-        exoPlayer.seekToNextMediaItem()
-        publishState()
+        if (released) return
+        runCatching {
+            exoPlayer.seekToNextMediaItem()
+            publishState()
+        }
     }
 
     override suspend fun skipPrevious() {
-        exoPlayer.seekToPreviousMediaItem()
-        publishState()
+        if (released) return
+        runCatching {
+            exoPlayer.seekToPreviousMediaItem()
+            publishState()
+        }
     }
 
     override suspend fun seekTo(positionMs: Long) {
-        exoPlayer.seekTo(positionMs)
-        publishState()
+        if (released) return
+        runCatching {
+            exoPlayer.seekTo(positionMs)
+            publishState()
+        }
     }
 
     fun player(): ExoPlayer = exoPlayer
 
     fun release() {
+        released = true
         stopPositionTicker()
+        exoPlayer.removeListener(listener)
         exoPlayer.release()
     }
 
@@ -157,23 +176,27 @@ class Media3PlaybackController @Inject constructor(
     }
 
     private fun publishState() {
-        val index = exoPlayer.currentMediaItemIndex.takeIf { it >= 0 } ?: 0
-        state.value = PlaybackState(
-            currentSong = currentQueue.getOrNull(index),
-            isPlaying = exoPlayer.isPlaying,
-            positionMs = exoPlayer.currentPosition.coerceAtLeast(0L),
-            durationMs = exoPlayer.duration.takeIf { it > 0 } ?: state.value.currentSong?.durationMs ?: 0L,
-            queue = PlaybackQueue(
-                items = currentQueue,
-                currentIndex = index,
-                shuffleEnabled = exoPlayer.shuffleModeEnabled,
-                repeatMode = when (exoPlayer.repeatMode) {
-                    Player.REPEAT_MODE_ONE -> RepeatMode.ONE
-                    Player.REPEAT_MODE_ALL -> RepeatMode.ALL
-                    else -> RepeatMode.OFF
-                },
-            ),
-        )
+        if (released) return
+        runCatching {
+            val index = exoPlayer.currentMediaItemIndex.takeIf { it >= 0 } ?: 0
+            state.value = PlaybackState(
+                currentSong = currentQueue.getOrNull(index),
+                isPlaying = exoPlayer.isPlaying,
+                positionMs = exoPlayer.currentPosition.coerceAtLeast(0L),
+                durationMs = exoPlayer.duration.takeIf { it > 0 }
+                    ?: state.value.currentSong?.durationMs ?: 0L,
+                queue = PlaybackQueue(
+                    items = currentQueue,
+                    currentIndex = index,
+                    shuffleEnabled = exoPlayer.shuffleModeEnabled,
+                    repeatMode = when (exoPlayer.repeatMode) {
+                        Player.REPEAT_MODE_ONE -> RepeatMode.ONE
+                        Player.REPEAT_MODE_ALL -> RepeatMode.ALL
+                        else -> RepeatMode.OFF
+                    },
+                ),
+            )
+        }
     }
 
     private fun toMediaItem(song: Song): MediaItem {
