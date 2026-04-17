@@ -106,6 +106,7 @@ import coil.compose.AsyncImage
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -139,48 +140,24 @@ private enum class TopLevelDestination(
     SETTINGS("settings", "Profile", Icons.Default.Person, Icons.Outlined.Person),
 }
 
+private val HOME_FILTER_CHIPS = listOf("All", "Music", "Podcasts")
+
 @Composable
 fun MusicApp() {
     val navController = rememberNavController()
-    val destinations = TopLevelDestination.entries
+    val destinations = remember { TopLevelDestination.entries }
     val rootPlayerViewModel: PlayerViewModel = hiltViewModel()
-    val playerState by rootPlayerViewModel.uiState.collectAsStateWithLifecycle()
 
     AppTheme {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Scaffold(
                 containerColor = MaterialTheme.colorScheme.background,
                 bottomBar = {
-                    val backStackEntry by navController.currentBackStackEntryAsState()
-                    val route = backStackEntry?.destination?.route
-                    Column {
-                        if (playerState.hasSong && route != TopLevelDestination.PLAYER.route) {
-                            MiniPlayer(
-                                state = playerState,
-                                onTogglePlayPause = rootPlayerViewModel::togglePlayPause,
-                                onClick = {
-                                    navController.navigate(TopLevelDestination.PLAYER.route) {
-                                        popUpTo(navController.graph.findStartDestination().id) { saveState = true }
-                                        launchSingleTop = true
-                                        restoreState = true
-                                    }
-                                },
-                            )
-                        }
-                        SpotifishBottomBar(
-                            currentRoute = route,
-                            destinations = destinations,
-                            onNavigate = { destination ->
-                                navController.navigate(destination.route) {
-                                    popUpTo(navController.graph.findStartDestination().id) {
-                                        saveState = true
-                                    }
-                                    launchSingleTop = true
-                                    restoreState = true
-                                }
-                            },
-                        )
-                    }
+                    MusicAppBottomBar(
+                        navController = navController,
+                        destinations = destinations,
+                        playerViewModel = rootPlayerViewModel,
+                    )
                 },
             ) { paddingValues ->
                 NavHost(
@@ -226,13 +203,7 @@ fun MusicApp() {
                         )
                     }
                     composable(TopLevelDestination.PLAYER.route) {
-                        PlayerScreen(
-                            state = playerState,
-                            onTogglePlayPause = rootPlayerViewModel::togglePlayPause,
-                            onNext = rootPlayerViewModel::skipNext,
-                            onPrevious = rootPlayerViewModel::skipPrevious,
-                            onSeek = rootPlayerViewModel::seekTo,
-                        )
+                        PlayerRoute(playerViewModel = rootPlayerViewModel)
                     }
                     composable(TopLevelDestination.SETTINGS.route) {
                         val viewModel = hiltViewModel<SettingsViewModel>()
@@ -287,9 +258,70 @@ fun MusicApp() {
     }
 }
 
+@Composable
+private fun MusicAppBottomBar(
+    navController: NavHostController,
+    destinations: List<TopLevelDestination>,
+    playerViewModel: PlayerViewModel,
+) {
+    val playerState by playerViewModel.uiState.collectAsStateWithLifecycle()
+    val backStackEntry by navController.currentBackStackEntryAsState()
+    val route = backStackEntry?.destination?.route
+
+    Column {
+        if (playerState.hasSong && route != TopLevelDestination.PLAYER.route) {
+            MiniPlayer(
+                state = playerState,
+                onTogglePlayPause = playerViewModel::togglePlayPause,
+                onClick = {
+                    navController.navigate(TopLevelDestination.PLAYER.route) {
+                        popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                        launchSingleTop = true
+                        restoreState = true
+                    }
+                },
+            )
+        }
+        SpotifishBottomBar(
+            currentRoute = route,
+            destinations = destinations,
+            onNavigate = { destination ->
+                navController.navigate(destination.route) {
+                    popUpTo(navController.graph.findStartDestination().id) {
+                        saveState = true
+                    }
+                    launchSingleTop = true
+                    restoreState = true
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun PlayerRoute(
+    playerViewModel: PlayerViewModel,
+) {
+    val playerState by playerViewModel.uiState.collectAsStateWithLifecycle()
+    PlayerScreen(
+        state = playerState,
+        onTogglePlayPause = playerViewModel::togglePlayPause,
+        onNext = playerViewModel::skipNext,
+        onPrevious = playerViewModel::skipPrevious,
+        onSeek = playerViewModel::seekTo,
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Home
 // ---------------------------------------------------------------------------
+
+private data class HomeBuckets(
+    val allSongs: List<Song>,
+    val quickPicks: List<Song>,
+    val jumpBackIn: List<Song>,
+    val recentlyPlayed: List<Song>,
+)
 
 @Composable
 private fun HomeScreen(
@@ -297,11 +329,15 @@ private fun HomeScreen(
     onPlaySong: (Song, List<Song>) -> Unit,
     onToggleFavorite: (String) -> Unit,
 ) {
-    val allSongs = state.sections.flatMap { it.songs }.distinctBy { it.id }
-    val quickPicks = allSongs.take(6)
-    val jumpBackIn = allSongs.drop(6).ifEmpty { allSongs }.take(8)
-    val recentlyPlayed = allSongs.filter { it.isFavorite }.ifEmpty { allSongs }.take(5)
-    val chips = listOf("All", "Music", "Podcasts")
+    val buckets = remember(state.sections) {
+        val allSongs = state.sections.flatMap { it.songs }.distinctBy { it.id }
+        HomeBuckets(
+            allSongs = allSongs,
+            quickPicks = allSongs.take(6),
+            jumpBackIn = allSongs.drop(6).ifEmpty { allSongs }.take(8),
+            recentlyPlayed = allSongs.filter { it.isFavorite }.ifEmpty { allSongs }.take(5),
+        )
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         // Ambient gradient behind the greeting card — gives the home screen the
@@ -326,35 +362,43 @@ private fun HomeScreen(
             verticalArrangement = Arrangement.spacedBy(28.dp),
         ) {
             item {
-                HomeHeader(chips = chips)
+                HomeHeader(chips = HOME_FILTER_CHIPS)
             }
             item {
                 QuickPickGrid(
-                    songs = quickPicks,
-                    onPlaySong = { song -> onPlaySong(song, allSongs.ifEmpty { quickPicks }) },
+                    songs = buckets.quickPicks,
+                    onPlaySong = { song ->
+                        onPlaySong(
+                            song,
+                            buckets.allSongs.ifEmpty { buckets.quickPicks },
+                        )
+                    },
                 )
             }
-            if (jumpBackIn.isNotEmpty()) {
+            if (buckets.jumpBackIn.isNotEmpty()) {
                 item {
                     FeatureSection(
                         title = "Jump back in",
                         subtitle = "Made for your recent rotations",
-                        songs = jumpBackIn,
-                        onPlaySong = { song -> onPlaySong(song, jumpBackIn) },
+                        songs = buckets.jumpBackIn,
+                        onPlaySong = { song -> onPlaySong(song, buckets.jumpBackIn) },
                     )
                 }
             }
-            if (recentlyPlayed.isNotEmpty()) {
+            if (buckets.recentlyPlayed.isNotEmpty()) {
                 item {
                     RecentSection(
                         title = "Your favorites",
-                        songs = recentlyPlayed,
-                        onPlaySong = { song -> onPlaySong(song, recentlyPlayed) },
+                        songs = buckets.recentlyPlayed,
+                        onPlaySong = { song -> onPlaySong(song, buckets.recentlyPlayed) },
                         onToggleFavorite = onToggleFavorite,
                     )
                 }
             }
-            items(state.sections) { section ->
+            items(
+                items = state.sections,
+                key = { section -> section.title },
+            ) { section ->
                 FeatureSection(
                     title = section.title,
                     subtitle = "Fresh picks from your library",
@@ -503,7 +547,10 @@ private fun FeatureSection(
             )
         }
         LazyRow(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            items(songs) { song ->
+            items(
+                items = songs,
+                key = { song -> song.id },
+            ) { song ->
                 FeaturedAlbumCard(song = song, onClick = { onPlaySong(song) })
             }
         }
@@ -576,8 +623,10 @@ private fun ArtworkThumb(
     modifier: Modifier = Modifier,
 ) {
     val boxModifier = modifier.clip(RoundedCornerShape(6.dp))
-    val gradient = gradientForSong(song)
-    val initial = song.title.take(1).ifBlank { song.artist.take(1) }.uppercase()
+    val gradient = remember(song.id) { gradientForSong(song.id) }
+    val initial = remember(song.id, song.title, song.artist) {
+        song.title.take(1).ifBlank { song.artist.take(1) }.uppercase()
+    }
 
     // Always render the gradient + initial as a placeholder underneath the image,
     // so a failed Coil load (404, network blip, missing art file on the backend)
@@ -604,9 +653,9 @@ private fun ArtworkThumb(
     }
 }
 
-private fun gradientForSong(song: Song): Brush {
+private fun gradientForSong(songId: String): Brush {
     // Deterministic palette so the same song always picks the same pair of colors.
-    val seed = (song.id.hashCode().absoluteValue) % ARTWORK_PALETTES.size
+    val seed = (songId.hashCode().absoluteValue) % ARTWORK_PALETTES.size
     val pair = ARTWORK_PALETTES[seed]
     return Brush.linearGradient(listOf(pair.first, pair.second))
 }
@@ -1193,7 +1242,7 @@ private fun PlayerScreen(
     onPrevious: () -> Unit,
     onSeek: (Long) -> Unit,
 ) {
-    val ambient = state.currentSong?.let { gradientForSong(it) }
+    val ambient = state.currentSong?.let { gradientForSong(it.id) }
         ?: Brush.verticalGradient(listOf(SpotifyCard, SpotifyBackground))
     Box(
         modifier = Modifier

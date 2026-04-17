@@ -20,9 +20,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
@@ -54,6 +57,7 @@ class RemoteMusicRepository @Inject constructor(
     private val localSongs = MutableStateFlow<List<Song>>(emptyList())
     private val remoteSongs = MutableStateFlow<List<Song>>(emptyList())
     private val driveSyncState = MutableStateFlow(DriveSyncState())
+    private val remoteFetchMutex = Mutex()
     private var syncPollJob: Job? = null
 
     init {
@@ -76,7 +80,7 @@ class RemoteMusicRepository @Inject constructor(
                 .distinctBy { it.id }
                 .map { song -> song.copy(isFavorite = song.id in favorites) }
                 .sortedWith(compareBy<Song> { it.title.lowercase() }.thenBy { it.artist.lowercase() })
-        }
+        }.distinctUntilChanged()
     }
 
     override fun observeHomeSections(): Flow<List<HomeSection>> {
@@ -87,14 +91,17 @@ class RemoteMusicRepository @Inject constructor(
                 HomeSection("Drive Library", songs.filter { it.sourceType == SourceType.DRIVE }.take(12)),
                 HomeSection("All Songs", songs.take(20)),
             ).filter { it.songs.isNotEmpty() }
-        }
+        }.distinctUntilChanged()
     }
 
     override fun observeDriveSyncState(): Flow<DriveSyncState> = driveSyncState
 
     override suspend fun refreshLocalLibrary() {
-        localSongs.value = withContext(dispatchersProvider.io) {
+        val scanned = withContext(dispatchersProvider.io) {
             localMusicDataSource.scan()
+        }
+        if (scanned != localSongs.value) {
+            localSongs.value = scanned
         }
     }
 
@@ -104,7 +111,6 @@ class RemoteMusicRepository @Inject constructor(
         // and repull the song list at the end.
         val response = api.runSync()
         pollSyncStatus(jobId = response.syncJobId)
-        fetchRemoteLibrary()
     }
 
     override fun enqueueDriveLibraryRefresh() {
@@ -113,7 +119,6 @@ class RemoteMusicRepository @Inject constructor(
             runCatching {
                 val response = api.runSync()
                 pollSyncStatus(jobId = response.syncJobId)
-                fetchRemoteLibrary()
             }.onFailure { throwable ->
                 driveSyncState.value = DriveSyncState(
                     isSyncing = false,
@@ -158,7 +163,6 @@ class RemoteMusicRepository @Inject constructor(
                     isPaused = false,
                 )
                 pollSyncStatus(jobId = response.syncJobId)
-                fetchRemoteLibrary()
             }.onFailure { throwable ->
                 driveSyncState.value = driveSyncState.value.copy(
                     isSyncing = false,
@@ -201,17 +205,21 @@ class RemoteMusicRepository @Inject constructor(
     }
 
     private suspend fun fetchRemoteLibrary() {
-        val collected = mutableListOf<Song>()
-        var cursor: String? = null
-        do {
-            // Backend caps limit at 1000, which comfortably fits any realistic
-            // Spotifish library — keeps the polling refresh as a single round trip
-            // and avoids the broken cursor pagination path entirely.
-            val page = api.listSongs(cursor = cursor, limit = 1000)
-            collected += page.safeItems.map { it.toDomain() }
-            cursor = page.nextCursor
-        } while (cursor != null)
-        remoteSongs.value = collected
+        remoteFetchMutex.withLock {
+            val collected = mutableListOf<Song>()
+            var cursor: String? = null
+            do {
+                // Backend caps limit at 1000, which comfortably fits any realistic
+                // Spotifish library — keeps the polling refresh as a single round trip
+                // and avoids the broken cursor pagination path entirely.
+                val page = api.listSongs(cursor = cursor, limit = 1000)
+                collected += page.safeItems.map { it.toDomain() }
+                cursor = page.nextCursor
+            } while (cursor != null)
+            if (collected != remoteSongs.value) {
+                remoteSongs.value = collected
+            }
+        }
     }
 
     private suspend fun pollSyncStatus(jobId: String) {
@@ -224,28 +232,39 @@ class RemoteMusicRepository @Inject constructor(
         // (~POLL_INTERVAL_MILLIS lag) rather than waiting for the whole job to
         // finish.
         var attempts = 0
+        var lastFetchedProcessedCount = -1
         while (true) {
             val statusResult = runCatching { api.syncStatus() }
             val status = statusResult.getOrNull()
             if (status == null) {
                 statusResult.exceptionOrNull()?.let {
-                    Log.w(TAG, "syncStatus poll failed", it)
+                    Log.w(TAG, "syncStatus poll failed for job=$jobId", it)
                 }
                 break
             }
             driveSyncState.value = status.toDomain()
+            val isTerminalState =
+                status.state == "succeeded" || status.state == "failed" || status.state == "paused"
+            val shouldRefreshLibrary =
+                isTerminalState || status.processedCount != lastFetchedProcessedCount
+            if (shouldRefreshLibrary) {
+                // Fetch song catalog only when progress changed (or terminal state)
+                // to avoid redundant full-library pulls that churn Compose lists.
+                runCatching { fetchRemoteLibrary() }
+                    .onSuccess { lastFetchedProcessedCount = status.processedCount }
+                    .onFailure {
+                        Log.w(
+                            TAG,
+                            "fetchRemoteLibrary during sync poll failed for job=$jobId: ${it.message}",
+                            it,
+                        )
+                    }
+            }
             // Stop polling on terminal states. 'paused' is also terminal from the
             // poll loop's perspective — the loop is restarted by resumeDriveLibraryRefresh.
-            if (status.state == "succeeded" || status.state == "failed" || status.state == "paused") break
+            if (isTerminalState) break
             attempts += 1
             if (attempts > MAX_POLL_ATTEMPTS) break
-            // Refresh the song list every poll so the snappy per-song progress on
-            // the backend translates into snappy per-poll updates here. Log any
-            // failure so the next time the response shape drifts we can spot it
-            // immediately in logcat instead of debugging by inference.
-            runCatching { fetchRemoteLibrary() }.onFailure {
-                Log.w(TAG, "fetchRemoteLibrary during sync poll failed: ${it.message}", it)
-            }
             delay(POLL_INTERVAL_MILLIS)
         }
     }
