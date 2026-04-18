@@ -255,6 +255,11 @@ fun MusicApp() {
                         ) { result ->
                             activity?.let { viewModel.completeDriveConnect(it, result.data) }
                         }
+                        val localFolderLauncher = rememberLauncherForActivityResult(
+                            contract = ActivityResultContracts.OpenDocumentTree(),
+                        ) { uri ->
+                            viewModel.addLocalFolder(uri)
+                        }
                         LaunchedEffect(viewModel.events, context) {
                             viewModel.events.collect { event ->
                                 when (event) {
@@ -281,6 +286,9 @@ fun MusicApp() {
                             onConnectDrive = { activity?.let(viewModel::connectDrive) },
                             onDisconnectDrive = viewModel::disconnectDrive,
                             onChooseFolder = viewModel::openFolderPicker,
+                            onChooseLocalFolder = { localFolderLauncher.launch(null) },
+                            onRemoveLocalFolder = viewModel::removeLocalFolder,
+                            onClearLocalFolders = viewModel::clearLocalFolders,
                             onNavigateUpFolder = viewModel::navigateUpDriveFolders,
                             onDismissFolderPicker = viewModel::dismissFolderPicker,
                             onOpenFolder = viewModel::navigateIntoDriveFolder,
@@ -343,6 +351,7 @@ private fun PlayerRoute(
     val playerState by playerViewModel.uiState.collectAsStateWithLifecycle()
     PlayerScreen(
         state = playerState,
+        onToggleFavorite = playerViewModel::toggleCurrentSongFavorite,
         onTogglePlayPause = playerViewModel::togglePlayPause,
         onNext = playerViewModel::skipNext,
         onPrevious = playerViewModel::skipPrevious,
@@ -1444,6 +1453,7 @@ private fun AlbumRow(
 @Composable
 private fun PlayerScreen(
     state: PlayerUiState,
+    onToggleFavorite: () -> Unit,
     onTogglePlayPause: () -> Unit,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
@@ -1541,12 +1551,21 @@ private fun PlayerScreen(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                Icon(
-                    imageVector = Icons.Default.FavoriteBorder,
-                    contentDescription = "Save",
-                    tint = SpotifyWhite,
-                    modifier = Modifier.size(26.dp),
-                )
+                IconButton(
+                    onClick = onToggleFavorite,
+                    enabled = state.currentSong != null,
+                ) {
+                    Icon(
+                        imageVector = if (state.isCurrentSongFavorite) {
+                            Icons.Default.Favorite
+                        } else {
+                            Icons.Default.FavoriteBorder
+                        },
+                        contentDescription = if (state.isCurrentSongFavorite) "Unlike" else "Like",
+                        tint = if (state.isCurrentSongFavorite) SpotifyGreen else SpotifyWhite,
+                        modifier = Modifier.size(26.dp),
+                    )
+                }
             }
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 var scrubbing by remember { mutableStateOf(false) }
@@ -1655,6 +1674,9 @@ private fun SettingsScreen(
     onConnectDrive: () -> Unit,
     onDisconnectDrive: () -> Unit,
     onChooseFolder: () -> Unit,
+    onChooseLocalFolder: () -> Unit,
+    onRemoveLocalFolder: (String) -> Unit,
+    onClearLocalFolders: () -> Unit,
     onNavigateUpFolder: () -> Unit,
     onDismissFolderPicker: () -> Unit,
     onOpenFolder: (DriveFolder) -> Unit,
@@ -1679,9 +1701,16 @@ private fun SettingsScreen(
             )
         }
         item { DriveProfileCard(state) }
+        item {
+            LocalLibraryCard(
+                state = state,
+                onChooseLocalFolder = onChooseLocalFolder,
+                onRemoveLocalFolder = onRemoveLocalFolder,
+                onClearLocalFolders = onClearLocalFolders,
+            )
+        }
         item { DriveAccessCard(state, onConnectDrive, onDisconnectDrive, onChooseFolder) }
         item { DriveSyncCard(state, onRefresh, onPauseSync, onResumeSync) }
-        item { ImportedRootsCard(state) }
     }
 
     if (state.isFolderPickerVisible) {
@@ -1960,37 +1989,106 @@ private fun DriveSyncCard(
 }
 
 @Composable
-private fun ImportedRootsCard(state: com.example.musicapp.ui.settings.SettingsUiState) {
+private fun LocalLibraryCard(
+    state: com.example.musicapp.ui.settings.SettingsUiState,
+    onChooseLocalFolder: () -> Unit,
+    onRemoveLocalFolder: (String) -> Unit,
+    onClearLocalFolders: () -> Unit,
+) {
     Card(
         colors = CardDefaults.cardColors(containerColor = SpotifyCard),
         shape = RoundedCornerShape(16.dp),
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        "Local music folders",
+                        color = SpotifyWhite,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                        "Only songs under selected folders show in library.",
+                        color = SpotifyTextMuted,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
                 Text(
-                    "Imported roots",
+                    text = state.localFolders.size.toString(),
                     color = SpotifyWhite,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Black,
                 )
+            }
+            if (state.localFolders.isEmpty()) {
                 Text(
-                    "Drive roots tracked by the app",
+                    "No local folder filter set. App will scan all local audio files.",
                     color = SpotifyTextMuted,
                     style = MaterialTheme.typography.bodySmall,
                 )
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    state.localFolders.forEach { folder ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                folder,
+                                modifier = Modifier.weight(1f),
+                                color = SpotifyWhite,
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                "Remove",
+                                modifier = Modifier.clickable { onRemoveLocalFolder(folder) },
+                                color = SpotifyTextMuted,
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                    }
+                }
             }
-            Text(
-                text = state.selectedFolderCount.toString(),
-                color = SpotifyWhite,
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Black,
-            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = onChooseLocalFolder,
+                    enabled = !state.isWorking,
+                    shape = RoundedCornerShape(999.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = SpotifyGreen,
+                        contentColor = SpotifyBackground,
+                    ),
+                ) {
+                    Text("Choose local folder", fontWeight = FontWeight.Bold)
+                }
+                if (state.localFolders.isNotEmpty()) {
+                    Button(
+                        onClick = onClearLocalFolders,
+                        enabled = !state.isWorking,
+                        shape = RoundedCornerShape(999.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = SpotifyMuted.copy(alpha = 0.35f),
+                            contentColor = SpotifyWhite,
+                        ),
+                    ) {
+                        Text("Clear", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
         }
     }
 }

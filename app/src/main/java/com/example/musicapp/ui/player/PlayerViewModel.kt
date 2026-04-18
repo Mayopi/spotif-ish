@@ -4,11 +4,13 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.musicapp.domain.model.Song
 import com.example.musicapp.domain.player.PlaybackController
+import com.example.musicapp.domain.usecase.ObserveFavoritesUseCase
+import com.example.musicapp.domain.usecase.ToggleFavoriteUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -22,6 +24,7 @@ data class PlayerUiState(
     val queueSize: Int = 0,
     val positionMs: Long = 0L,
     val durationMs: Long = 0L,
+    val isCurrentSongFavorite: Boolean = false,
 ) {
     val hasSong: Boolean get() = currentSong != null
     val progress: Float
@@ -31,10 +34,14 @@ data class PlayerUiState(
 @HiltViewModel
 class PlayerViewModel @Inject constructor(
     private val playbackController: PlaybackController,
+    observeFavoritesUseCase: ObserveFavoritesUseCase,
+    private val toggleFavoriteUseCase: ToggleFavoriteUseCase,
 ) : ViewModel() {
 
-    val uiState: StateFlow<PlayerUiState> = playbackController.observeState()
-        .map { state ->
+    val uiState: StateFlow<PlayerUiState> = combine(
+        playbackController.observeState(),
+        observeFavoritesUseCase(),
+    ) { state, favorites ->
             val song = state.currentSong
             PlayerUiState(
                 currentSong = song,
@@ -46,6 +53,7 @@ class PlayerViewModel @Inject constructor(
                 queueSize = state.queue.items.size,
                 positionMs = state.positionMs,
                 durationMs = state.durationMs,
+                isCurrentSongFavorite = song?.id?.let { it in favorites } == true,
             )
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), PlayerUiState())
@@ -64,5 +72,10 @@ class PlayerViewModel @Inject constructor(
 
     fun seekTo(positionMs: Long) {
         viewModelScope.launch { playbackController.seekTo(positionMs) }
+    }
+
+    fun toggleCurrentSongFavorite() {
+        val songId = uiState.value.currentSong?.id ?: return
+        viewModelScope.launch { toggleFavoriteUseCase(songId) }
     }
 }

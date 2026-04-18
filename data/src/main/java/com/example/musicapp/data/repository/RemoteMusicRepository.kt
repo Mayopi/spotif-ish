@@ -12,6 +12,7 @@ import com.example.musicapp.domain.model.Song
 import com.example.musicapp.domain.model.SourceType
 import com.example.musicapp.domain.repository.FavoritesRepository
 import com.example.musicapp.domain.repository.MusicRepository
+import com.example.musicapp.domain.repository.SettingsRepository
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
@@ -51,6 +52,7 @@ class RemoteMusicRepository @Inject constructor(
     private val api: SpotifishApi,
     private val localMusicDataSource: LocalMusicDataSource,
     private val favoritesRepository: FavoritesRepository,
+    private val settingsRepository: SettingsRepository,
     private val dispatchersProvider: DispatchersProvider,
 ) : MusicRepository {
 
@@ -114,8 +116,9 @@ class RemoteMusicRepository @Inject constructor(
     override fun observeDriveSyncState(): Flow<DriveSyncState> = driveSyncState
 
     override suspend fun refreshLocalLibrary() {
+        val selectedFolders = settingsRepository.observeSettings().first().selectedFolders
         val scanned = withContext(dispatchersProvider.io) {
-            localMusicDataSource.scan()
+            localMusicDataSource.scan(selectedFolders)
         }
         if (scanned != localSongs.value) {
             localSongs.value = scanned

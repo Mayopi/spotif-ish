@@ -2,6 +2,8 @@ package com.example.musicapp.ui.settings
 
 import android.app.Activity
 import android.content.Intent
+import android.net.Uri
+import android.provider.DocumentsContract
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.musicapp.data.auth.AuthRepository
@@ -15,8 +17,10 @@ import com.example.musicapp.domain.usecase.EnqueueDriveLibraryRefreshUseCase
 import com.example.musicapp.domain.usecase.ObserveDriveSyncStateUseCase
 import com.example.musicapp.domain.usecase.ObserveSettingsUseCase
 import com.example.musicapp.domain.usecase.PauseDriveLibraryRefreshUseCase
+import com.example.musicapp.domain.usecase.RefreshLocalLibraryUseCase
 import com.example.musicapp.domain.usecase.ResumeDriveLibraryRefreshUseCase
 import com.example.musicapp.domain.usecase.UpdateDriveFolderUseCase
+import com.example.musicapp.domain.usecase.UpdateSelectedFoldersUseCase
 import com.example.musicapp.ui.auth.DriveAuthorizationResult
 import com.example.musicapp.ui.auth.GoogleDriveAuthorizationProvider
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -36,7 +40,7 @@ data class SettingsUiState(
     val connectedDriveName: String = "Google Drive",
     val connectedDriveFolderName: String = "Not connected",
     val connectedDriveEmail: String = "",
-    val selectedFolderCount: Int = 0,
+    val localFolders: List<String> = emptyList(),
     val isWorking: Boolean = false,
     val isFolderLoading: Boolean = false,
     val isDriveSyncing: Boolean = false,
@@ -77,6 +81,8 @@ class SettingsViewModel @Inject constructor(
     private val enqueueDriveLibraryRefreshUseCase: EnqueueDriveLibraryRefreshUseCase,
     private val pauseDriveLibraryRefreshUseCase: PauseDriveLibraryRefreshUseCase,
     private val resumeDriveLibraryRefreshUseCase: ResumeDriveLibraryRefreshUseCase,
+    private val refreshLocalLibraryUseCase: RefreshLocalLibraryUseCase,
+    private val updateSelectedFoldersUseCase: UpdateSelectedFoldersUseCase,
     private val updateDriveFolderUseCase: UpdateDriveFolderUseCase,
     private val api: SpotifishApi,
     private val authRepository: AuthRepository,
@@ -111,7 +117,7 @@ class SettingsViewModel @Inject constructor(
             connectedDriveName = settings.connectedDriveFolder?.folderName ?: "Google Drive",
             connectedDriveFolderName = settings.connectedDriveFolder?.folderName ?: "Not connected",
             connectedDriveEmail = session?.email.orEmpty(),
-            selectedFolderCount = if (settings.connectedDriveFolder != null) 1 else 0,
+            localFolders = settings.selectedFolders,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsUiState())
 
@@ -181,6 +187,27 @@ class SettingsViewModel @Inject constructor(
             workingState.value = false
             _events.emit(SettingsEvent.SignOut)
         }
+    }
+
+    fun addLocalFolder(uri: Uri?) {
+        val localFolderPath = uri?.let(::extractRelativePathFromTreeUri)
+        if (localFolderPath == null) {
+            viewModelScope.launch {
+                _events.emit(SettingsEvent.Message("Could not read selected local folder."))
+            }
+            return
+        }
+        val nextFolders = (baseState.value.localFolders + localFolderPath).distinct()
+        updateLocalFolders(nextFolders, "Local folder added: $localFolderPath")
+    }
+
+    fun removeLocalFolder(folder: String) {
+        val nextFolders = baseState.value.localFolders.filterNot { it == folder }
+        updateLocalFolders(nextFolders, "Local folder removed: $folder")
+    }
+
+    fun clearLocalFolders() {
+        updateLocalFolders(emptyList(), "Local folder filters cleared.")
     }
 
     fun disconnectDrive() {
@@ -350,5 +377,29 @@ class SettingsViewModel @Inject constructor(
         currentFolderState.value = FolderBrowserNode(id = ROOT_ID, path = ROOT_PATH)
         folderHistoryState.value = emptyList()
         driveFoldersState.value = emptyList()
+    }
+
+    private fun extractRelativePathFromTreeUri(uri: Uri): String? {
+        val treeDocumentId = runCatching { DocumentsContract.getTreeDocumentId(uri) }.getOrNull() ?: return null
+        val relativePath = treeDocumentId.substringAfter(':', missingDelimiterValue = treeDocumentId)
+            .trim()
+            .trim('/')
+        return relativePath.takeIf { it.isNotBlank() }
+    }
+
+    private fun updateLocalFolders(
+        folders: List<String>,
+        successMessage: String,
+    ) {
+        viewModelScope.launch {
+            runCatching {
+                updateSelectedFoldersUseCase(folders)
+                refreshLocalLibraryUseCase()
+            }.onSuccess {
+                _events.emit(SettingsEvent.Message(successMessage))
+            }.onFailure { throwable ->
+                _events.emit(SettingsEvent.Message(throwable.message ?: "Could not update local folders."))
+            }
+        }
     }
 }

@@ -21,11 +21,19 @@ class MainActivity : ComponentActivity() {
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { /* no-op: media notification still works if denied, just no system tray entry */ }
+    private val audioPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) {
+            mainViewModel.refreshLocalLibrary()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         requestNotificationPermissionIfNeeded()
+        requestAudioPermissionIfNeeded()
         setContent {
             AuthGate()
         }
@@ -39,6 +47,21 @@ class MainActivity : ComponentActivity() {
         ) == PackageManager.PERMISSION_GRANTED
         if (!granted) {
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    private fun requestAudioPermissionIfNeeded() {
+        val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Manifest.permission.READ_MEDIA_AUDIO
+        } else {
+            Manifest.permission.READ_EXTERNAL_STORAGE
+        }
+        val granted = ContextCompat.checkSelfPermission(
+            this,
+            permission,
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            audioPermissionLauncher.launch(permission)
         }
     }
 }
