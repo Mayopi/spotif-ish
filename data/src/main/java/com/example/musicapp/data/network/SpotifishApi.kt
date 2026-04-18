@@ -111,13 +111,13 @@ interface SpotifishApi {
     suspend fun listPlaylists(): List<PlaylistDto>
 
     @POST("v1/playlists")
-    suspend fun createPlaylist(@Body request: CreatePlaylistRequest): PlaylistDto
+    suspend fun createPlaylist(@Body request: CreatePlaylistRequest)
 
     @PATCH("v1/playlists/{id}")
     suspend fun renamePlaylist(
         @Path("id") playlistId: String,
         @Body request: RenamePlaylistRequest,
-    ): PlaylistDto
+    )
 
     @DELETE("v1/playlists/{id}")
     suspend fun deletePlaylist(@Path("id") playlistId: String)

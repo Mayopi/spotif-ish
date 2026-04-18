@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -37,11 +38,14 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Home
@@ -81,12 +85,14 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
@@ -117,6 +123,7 @@ import com.example.musicapp.domain.model.DriveFolder
 import com.example.musicapp.ui.home.HomeViewModel
 import com.example.musicapp.ui.library.AlbumGroup
 import com.example.musicapp.ui.library.ArtistGroup
+import com.example.musicapp.ui.library.LibraryEvent
 import com.example.musicapp.ui.library.LibraryTab
 import com.example.musicapp.ui.library.LibraryViewModel
 import com.example.musicapp.ui.player.PlayerUiState
@@ -176,28 +183,58 @@ fun MusicApp() {
                     composable(TopLevelDestination.HOME.route) {
                         val viewModel = hiltViewModel<HomeViewModel>()
                         val state by viewModel.uiState.collectAsStateWithLifecycle()
+                        val context = LocalContext.current
                         HomeScreen(
                             state = state,
-                            onPlaySong = viewModel::playSong,
+                            onPlaySong = { song, queue ->
+                                Toast.makeText(
+                                    context,
+                                    "Loading song, please wait...",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                                viewModel.playSong(song, queue)
+                            },
                             onToggleFavorite = viewModel::toggleFavorite,
                         )
                     }
                     composable(TopLevelDestination.SEARCH.route) {
                         val viewModel = hiltViewModel<SearchViewModel>()
                         val state by viewModel.uiState.collectAsStateWithLifecycle()
+                        val context = LocalContext.current
                         SearchScreen(
                             state = state,
                             onQueryChange = viewModel::updateQuery,
-                            onPlaySong = viewModel::playSong,
+                            onPlaySong = { song, queue ->
+                                Toast.makeText(
+                                    context,
+                                    "Loading song, please wait...",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                                viewModel.playSong(song, queue)
+                            },
                             onToggleFavorite = viewModel::toggleFavorite,
                         )
                     }
                     composable(TopLevelDestination.LIBRARY.route) {
                         val viewModel = hiltViewModel<LibraryViewModel>()
                         val state by viewModel.uiState.collectAsStateWithLifecycle()
+                        val context = LocalContext.current
+                        LaunchedEffect(viewModel.events, context) {
+                            viewModel.events.collect { event ->
+                                when (event) {
+                                    is LibraryEvent.Message -> {
+                                        Toast.makeText(context, event.text, Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
+                        }
                         LibraryScreen(
                             state = state,
                             onCreatePlaylist = viewModel::createPlaylist,
+                            onRenamePlaylist = viewModel::renamePlaylist,
+                            onDeletePlaylist = viewModel::deletePlaylist,
+                            onAddSongToPlaylist = viewModel::addSongToPlaylist,
+                            onRemoveSongFromPlaylist = viewModel::removeSongFromPlaylist,
                             onSelectTab = viewModel::selectTab,
                             onPlayGroup = viewModel::playGroup,
                         )
@@ -908,10 +945,35 @@ private fun GenreTile(genre: Genre) {
 @Composable
 private fun LibraryScreen(
     state: com.example.musicapp.ui.library.LibraryUiState,
-    onCreatePlaylist: () -> Unit,
+    onCreatePlaylist: (String) -> Unit,
+    onRenamePlaylist: (String, String) -> Unit,
+    onDeletePlaylist: (String) -> Unit,
+    onAddSongToPlaylist: (String, String) -> Unit,
+    onRemoveSongFromPlaylist: (String, String) -> Unit,
     onSelectTab: (LibraryTab) -> Unit,
     onPlayGroup: (List<Song>) -> Unit,
 ) {
+    var showCreateDialog by rememberSaveable { mutableStateOf(false) }
+    var createNameDraft by rememberSaveable { mutableStateOf("") }
+    var renamePlaylistId by rememberSaveable { mutableStateOf<String?>(null) }
+    var renameNameDraft by rememberSaveable { mutableStateOf("") }
+    var deletePlaylistId by rememberSaveable { mutableStateOf<String?>(null) }
+    var openPlaylistId by rememberSaveable { mutableStateOf<String?>(null) }
+    var addSongsPlaylistId by rememberSaveable { mutableStateOf<String?>(null) }
+
+    val playlistsById = remember(state.playlists) { state.playlists.associateBy { it.id } }
+    val renameTarget = remember(renamePlaylistId, playlistsById) { renamePlaylistId?.let(playlistsById::get) }
+    val deleteTarget = remember(deletePlaylistId, playlistsById) { deletePlaylistId?.let(playlistsById::get) }
+    val openTarget = remember(openPlaylistId, playlistsById) { openPlaylistId?.let(playlistsById::get) }
+    val addSongsTarget = remember(addSongsPlaylistId, playlistsById) { addSongsPlaylistId?.let(playlistsById::get) }
+
+    LaunchedEffect(state.playlists, renamePlaylistId, deletePlaylistId, openPlaylistId, addSongsPlaylistId) {
+        if (renamePlaylistId != null && renameTarget == null) renamePlaylistId = null
+        if (deletePlaylistId != null && deleteTarget == null) deletePlaylistId = null
+        if (openPlaylistId != null && openTarget == null) openPlaylistId = null
+        if (addSongsPlaylistId != null && addSongsTarget == null) addSongsPlaylistId = null
+    }
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -945,7 +1007,12 @@ private fun LibraryScreen(
                         color = SpotifyWhite,
                     )
                 }
-                IconButton(onClick = onCreatePlaylist) {
+                IconButton(
+                    onClick = {
+                        createNameDraft = ""
+                        showCreateDialog = true
+                    },
+                ) {
                     Icon(
                         imageVector = Icons.Default.Add,
                         contentDescription = "Create playlist",
@@ -961,11 +1028,119 @@ private fun LibraryScreen(
             )
         }
         when (state.selectedTab) {
-            LibraryTab.Playlists -> libraryPlaylistsSection(state)
+            LibraryTab.Playlists -> libraryPlaylistsSection(
+                state = state,
+                onOpenPlaylist = { playlistId -> openPlaylistId = playlistId },
+                onRenamePlaylist = { playlist ->
+                    renamePlaylistId = playlist.id
+                    renameNameDraft = playlist.name
+                },
+                onDeletePlaylist = { playlistId -> deletePlaylistId = playlistId },
+            )
             LibraryTab.Songs -> librarySongsSection(state)
             LibraryTab.Artists -> libraryArtistsSection(state, onPlayGroup)
             LibraryTab.Albums -> libraryAlbumsSection(state, onPlayGroup)
         }
+    }
+
+    if (showCreateDialog) {
+        AlertDialog(
+            onDismissRequest = { showCreateDialog = false },
+            title = { Text("Create playlist") },
+            text = {
+                OutlinedTextField(
+                    value = createNameDraft,
+                    onValueChange = { createNameDraft = it },
+                    singleLine = true,
+                    label = { Text("Playlist name") },
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onCreatePlaylist(createNameDraft)
+                        showCreateDialog = false
+                    },
+                    enabled = createNameDraft.isNotBlank(),
+                ) {
+                    Text("Create")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCreateDialog = false }) { Text("Cancel") }
+            },
+        )
+    }
+
+    if (renameTarget != null) {
+        AlertDialog(
+            onDismissRequest = { renamePlaylistId = null },
+            title = { Text("Rename playlist") },
+            text = {
+                OutlinedTextField(
+                    value = renameNameDraft,
+                    onValueChange = { renameNameDraft = it },
+                    singleLine = true,
+                    label = { Text("Playlist name") },
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onRenamePlaylist(renameTarget.id, renameNameDraft)
+                        renamePlaylistId = null
+                    },
+                    enabled = renameNameDraft.isNotBlank(),
+                ) {
+                    Text("Save")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { renamePlaylistId = null }) { Text("Cancel") }
+            },
+        )
+    }
+
+    if (deleteTarget != null) {
+        AlertDialog(
+            onDismissRequest = { deletePlaylistId = null },
+            title = { Text("Delete playlist") },
+            text = { Text("Delete \"${deleteTarget.name}\"? This cannot be undone.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onDeletePlaylist(deleteTarget.id)
+                        deletePlaylistId = null
+                        if (openPlaylistId == deleteTarget.id) openPlaylistId = null
+                        if (addSongsPlaylistId == deleteTarget.id) addSongsPlaylistId = null
+                    },
+                ) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { deletePlaylistId = null }) { Text("Cancel") }
+            },
+        )
+    }
+
+    if (openTarget != null) {
+        PlaylistSongsDialog(
+            playlist = openTarget,
+            songs = state.songs,
+            onDismiss = { openPlaylistId = null },
+            onAddSongs = { addSongsPlaylistId = openTarget.id },
+            onRemoveSong = { songId -> onRemoveSongFromPlaylist(openTarget.id, songId) },
+        )
+    }
+
+    if (addSongsTarget != null) {
+        PlaylistSongPickerDialog(
+            playlist = addSongsTarget,
+            allSongs = state.songs,
+            onDismiss = { addSongsPlaylistId = null },
+            onAddSong = { songId -> onAddSongToPlaylist(addSongsTarget.id, songId) },
+        )
     }
 }
 
@@ -999,6 +1174,9 @@ private fun LibraryTabRow(
 
 private fun androidx.compose.foundation.lazy.LazyListScope.libraryPlaylistsSection(
     state: com.example.musicapp.ui.library.LibraryUiState,
+    onOpenPlaylist: (String) -> Unit,
+    onRenamePlaylist: (Playlist) -> Unit,
+    onDeletePlaylist: (String) -> Unit,
 ) {
     if (state.playlists.isEmpty()) {
         item { EmptyLibraryMessage(text = "No playlists yet. Tap + to create one.") }
@@ -1007,7 +1185,17 @@ private fun androidx.compose.foundation.lazy.LazyListScope.libraryPlaylistsSecti
     item {
         LibrarySectionHeader(title = "Playlists", subtitle = "${state.playlists.size} playlists")
     }
-    items(state.playlists) { playlist -> PlaylistRow(playlist) }
+    items(
+        items = state.playlists,
+        key = { playlist -> playlist.id },
+    ) { playlist ->
+        PlaylistRow(
+            playlist = playlist,
+            onOpen = { onOpenPlaylist(playlist.id) },
+            onRename = { onRenamePlaylist(playlist) },
+            onDelete = { onDeletePlaylist(playlist.id) },
+        )
+    }
 }
 
 private fun androidx.compose.foundation.lazy.LazyListScope.librarySongsSection(
@@ -1979,10 +2167,16 @@ private fun SongRow(
 }
 
 @Composable
-private fun PlaylistRow(playlist: Playlist) {
+private fun PlaylistRow(
+    playlist: Playlist,
+    onOpen: () -> Unit,
+    onRename: () -> Unit,
+    onDelete: () -> Unit,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .clickable(onClick = onOpen)
             .padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -2011,6 +2205,180 @@ private fun PlaylistRow(playlist: Playlist) {
                 "Playlist • ${playlist.songIds.size} songs",
                 style = MaterialTheme.typography.bodySmall,
                 color = SpotifyTextMuted,
+            )
+        }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            IconButton(onClick = onRename, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    imageVector = Icons.Default.Edit,
+                    contentDescription = "Rename playlist",
+                    tint = SpotifyTextMuted,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+            IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = "Delete playlist",
+                    tint = SpotifyTextMuted,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlaylistSongsDialog(
+    playlist: Playlist,
+    songs: List<Song>,
+    onDismiss: () -> Unit,
+    onAddSongs: () -> Unit,
+    onRemoveSong: (String) -> Unit,
+) {
+    val songsById = remember(songs) { songs.associateBy { it.id } }
+    val playlistSongs = playlist.songIds.mapNotNull { songId -> songsById[songId] }
+    val unavailableCount = playlist.songIds.size - playlistSongs.size
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column {
+                Text(playlist.name, fontWeight = FontWeight.Black)
+                Text(
+                    "${playlist.songIds.size} songs",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = SpotifyTextMuted,
+                )
+            }
+        },
+        text = {
+            if (playlist.songIds.isEmpty()) {
+                Text(
+                    "Playlist empty. Tap Add songs.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = SpotifyTextMuted,
+                )
+            } else {
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 360.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    playlistSongs.forEach { song ->
+                        PlaylistSongActionRow(
+                            song = song,
+                            actionIcon = Icons.Default.Delete,
+                            actionDescription = "Remove from playlist",
+                            onAction = { onRemoveSong(song.id) },
+                        )
+                    }
+                    if (unavailableCount > 0) {
+                        Text(
+                            "$unavailableCount songs unavailable in current library view.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = SpotifyTextMuted,
+                            modifier = Modifier.padding(top = 8.dp),
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        },
+        dismissButton = {
+            TextButton(onClick = onAddSongs) { Text("Add songs") }
+        },
+    )
+}
+
+@Composable
+private fun PlaylistSongPickerDialog(
+    playlist: Playlist,
+    allSongs: List<Song>,
+    onDismiss: () -> Unit,
+    onAddSong: (String) -> Unit,
+) {
+    val existingSongIds = remember(playlist.songIds) { playlist.songIds.toSet() }
+    val candidates = remember(allSongs, existingSongIds) {
+        allSongs.filterNot { song -> song.id in existingSongIds }
+            .sortedBy { song -> song.title.lowercase() }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Add songs to ${playlist.name}") },
+        text = {
+            if (candidates.isEmpty()) {
+                Text(
+                    "No additional songs available.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = SpotifyTextMuted,
+                )
+            } else {
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 360.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    candidates.forEach { song ->
+                        PlaylistSongActionRow(
+                            song = song,
+                            actionIcon = Icons.Default.Add,
+                            actionDescription = "Add to playlist",
+                            onAction = { onAddSong(song.id) },
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Done") }
+        },
+    )
+}
+
+@Composable
+private fun PlaylistSongActionRow(
+    song: Song,
+    actionIcon: ImageVector,
+    actionDescription: String,
+    onAction: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = song.title,
+                color = SpotifyWhite,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = song.artist,
+                color = SpotifyTextMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        IconButton(onClick = onAction, modifier = Modifier.size(32.dp)) {
+            Icon(
+                imageVector = actionIcon,
+                contentDescription = actionDescription,
+                tint = SpotifyTextMuted,
+                modifier = Modifier.size(18.dp),
             )
         }
     }

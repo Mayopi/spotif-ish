@@ -5,14 +5,20 @@ import androidx.lifecycle.viewModelScope
 import com.example.musicapp.domain.model.Playlist
 import com.example.musicapp.domain.model.Song
 import com.example.musicapp.domain.player.PlaybackController
+import com.example.musicapp.domain.usecase.AddSongToPlaylistUseCase
 import com.example.musicapp.domain.usecase.CreatePlaylistUseCase
+import com.example.musicapp.domain.usecase.DeletePlaylistUseCase
 import com.example.musicapp.domain.usecase.ObservePlaylistsUseCase
 import com.example.musicapp.domain.usecase.ObserveSongsUseCase
+import com.example.musicapp.domain.usecase.RemoveSongFromPlaylistUseCase
+import com.example.musicapp.domain.usecase.RenamePlaylistUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -56,15 +62,25 @@ data class LibraryUiState(
     val selectedTab: LibraryTab = LibraryTab.Playlists,
 )
 
+sealed interface LibraryEvent {
+    data class Message(val text: String) : LibraryEvent
+}
+
 @HiltViewModel
 class LibraryViewModel @Inject constructor(
     observePlaylistsUseCase: ObservePlaylistsUseCase,
     observeSongsUseCase: ObserveSongsUseCase,
     private val createPlaylistUseCase: CreatePlaylistUseCase,
+    private val renamePlaylistUseCase: RenamePlaylistUseCase,
+    private val deletePlaylistUseCase: DeletePlaylistUseCase,
+    private val addSongToPlaylistUseCase: AddSongToPlaylistUseCase,
+    private val removeSongFromPlaylistUseCase: RemoveSongFromPlaylistUseCase,
     private val playbackController: PlaybackController,
 ) : ViewModel() {
 
     private val selectedTab = MutableStateFlow(LibraryTab.Playlists)
+    private val _events = MutableSharedFlow<LibraryEvent>()
+    val events = _events.asSharedFlow()
 
     val uiState: StateFlow<LibraryUiState> = combine(
         observePlaylistsUseCase(),
@@ -84,9 +100,37 @@ class LibraryViewModel @Inject constructor(
         selectedTab.value = tab
     }
 
-    fun createPlaylist() {
-        viewModelScope.launch {
-            createPlaylistUseCase("My Playlist")
+    fun createPlaylist(name: String) {
+        val normalizedName = name.trim()
+        if (normalizedName.isBlank()) return
+        launchPlaylistMutation(defaultErrorMessage = "Could not create playlist.") {
+            createPlaylistUseCase(normalizedName)
+        }
+    }
+
+    fun renamePlaylist(playlistId: String, newName: String) {
+        val normalizedName = newName.trim()
+        if (normalizedName.isBlank()) return
+        launchPlaylistMutation(defaultErrorMessage = "Could not rename playlist.") {
+            renamePlaylistUseCase(playlistId, normalizedName)
+        }
+    }
+
+    fun deletePlaylist(playlistId: String) {
+        launchPlaylistMutation(defaultErrorMessage = "Could not delete playlist.") {
+            deletePlaylistUseCase(playlistId)
+        }
+    }
+
+    fun addSongToPlaylist(playlistId: String, songId: String) {
+        launchPlaylistMutation(defaultErrorMessage = "Could not add song to playlist.") {
+            addSongToPlaylistUseCase(playlistId, songId)
+        }
+    }
+
+    fun removeSongFromPlaylist(playlistId: String, songId: String) {
+        launchPlaylistMutation(defaultErrorMessage = "Could not remove song from playlist.") {
+            removeSongFromPlaylistUseCase(playlistId, songId)
         }
     }
 
@@ -119,6 +163,19 @@ class LibraryViewModel @Inject constructor(
                 )
             }
             .sortedWith(compareBy({ it.name.lowercase() }, { it.artist.lowercase() }))
+
+    private fun launchPlaylistMutation(
+        defaultErrorMessage: String,
+        mutation: suspend () -> Unit,
+    ) {
+        viewModelScope.launch {
+            runCatching {
+                mutation()
+            }.onFailure { throwable ->
+                _events.emit(LibraryEvent.Message(throwable.message ?: defaultErrorMessage))
+            }
+        }
+    }
 
     private companion object {
         private const val UNKNOWN_ARTIST = "Unknown Artist"
