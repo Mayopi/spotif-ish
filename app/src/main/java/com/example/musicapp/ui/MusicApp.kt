@@ -235,6 +235,7 @@ fun MusicApp() {
                             onDeletePlaylist = viewModel::deletePlaylist,
                             onAddSongToPlaylist = viewModel::addSongToPlaylist,
                             onRemoveSongFromPlaylist = viewModel::removeSongFromPlaylist,
+                            onToggleFavorite = viewModel::toggleFavorite,
                             onSelectTab = viewModel::selectTab,
                             onPlayGroup = viewModel::playGroup,
                         )
@@ -357,7 +358,8 @@ private data class HomeBuckets(
     val allSongs: List<Song>,
     val quickPicks: List<Song>,
     val jumpBackIn: List<Song>,
-    val recentlyPlayed: List<Song>,
+    val favoriteSongs: List<Song>,
+    val spotlightedSectionTitles: Set<String>,
 )
 
 @Composable
@@ -368,11 +370,23 @@ private fun HomeScreen(
 ) {
     val buckets = remember(state.sections) {
         val allSongs = state.sections.flatMap { it.songs }.distinctBy { it.id }
+        val recentlyPlayed = state.sections
+            .firstOrNull { it.title.equals("Recently Played", ignoreCase = true) }
+            ?.songs
+            .orEmpty()
+        val favoriteSongs = state.sections
+            .firstOrNull { it.title.equals("Favorite Songs", ignoreCase = true) }
+            ?.songs
+            .orEmpty()
         HomeBuckets(
             allSongs = allSongs,
             quickPicks = allSongs.take(6),
-            jumpBackIn = allSongs.drop(6).ifEmpty { allSongs }.take(8),
-            recentlyPlayed = allSongs.filter { it.isFavorite }.ifEmpty { allSongs }.take(5),
+            jumpBackIn = recentlyPlayed.ifEmpty { allSongs.drop(6).ifEmpty { allSongs } }.take(8),
+            favoriteSongs = favoriteSongs.ifEmpty { allSongs.filter { it.isFavorite }.ifEmpty { allSongs } }.take(5),
+            spotlightedSectionTitles = buildSet {
+                if (recentlyPlayed.isNotEmpty()) add("Recently Played")
+                if (favoriteSongs.isNotEmpty()) add("Favorite Songs")
+            },
         )
     }
 
@@ -422,18 +436,21 @@ private fun HomeScreen(
                     )
                 }
             }
-            if (buckets.recentlyPlayed.isNotEmpty()) {
+            if (buckets.favoriteSongs.isNotEmpty()) {
                 item {
                     RecentSection(
-                        title = "Your favorites",
-                        songs = buckets.recentlyPlayed,
-                        onPlaySong = { song -> onPlaySong(song, buckets.recentlyPlayed) },
+                        title = "Favorite Songs",
+                        songs = buckets.favoriteSongs,
+                        onPlaySong = { song -> onPlaySong(song, buckets.favoriteSongs) },
                         onToggleFavorite = onToggleFavorite,
                     )
                 }
             }
+            val remainingSections = state.sections.filterNot { section ->
+                section.title in buckets.spotlightedSectionTitles
+            }
             items(
-                items = state.sections,
+                items = remainingSections,
                 key = { section -> section.title },
             ) { section ->
                 FeatureSection(
@@ -950,6 +967,7 @@ private fun LibraryScreen(
     onDeletePlaylist: (String) -> Unit,
     onAddSongToPlaylist: (String, String) -> Unit,
     onRemoveSongFromPlaylist: (String, String) -> Unit,
+    onToggleFavorite: (String) -> Unit,
     onSelectTab: (LibraryTab) -> Unit,
     onPlayGroup: (List<Song>) -> Unit,
 ) {
@@ -1037,7 +1055,7 @@ private fun LibraryScreen(
                 },
                 onDeletePlaylist = { playlistId -> deletePlaylistId = playlistId },
             )
-            LibraryTab.Songs -> librarySongsSection(state)
+            LibraryTab.Songs -> librarySongsSection(state, onToggleFavorite)
             LibraryTab.Artists -> libraryArtistsSection(state, onPlayGroup)
             LibraryTab.Albums -> libraryAlbumsSection(state, onPlayGroup)
         }
@@ -1200,6 +1218,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.libraryPlaylistsSecti
 
 private fun androidx.compose.foundation.lazy.LazyListScope.librarySongsSection(
     state: com.example.musicapp.ui.library.LibraryUiState,
+    onToggleFavorite: (String) -> Unit,
 ) {
     if (state.songs.isEmpty()) {
         item { EmptyLibraryMessage(text = "No songs yet. Connect Drive or add local files.") }
@@ -1209,7 +1228,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.librarySongsSection(
         LibrarySectionHeader(title = "All songs", subtitle = "${state.songs.size} tracks")
     }
     items(state.songs) { song ->
-        SongRow(song = song, onClick = {}, onToggleFavorite = {})
+        SongRow(song = song, onClick = {}, onToggleFavorite = { onToggleFavorite(song.id) })
     }
 }
 
@@ -1926,13 +1945,13 @@ private fun DriveSyncCard(
                 )
             }
 
-            if (state.isDriveSyncing || state.isDrivePaused) {
+            if (state.isDriveSyncing) {
                 LinearProgressIndicator(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(4.dp)
                         .clip(RoundedCornerShape(2.dp)),
-                    color = if (state.isDrivePaused) SpotifyMuted else SpotifyGreen,
+                    color = SpotifyGreen,
                     trackColor = SpotifyGreen.copy(alpha = 0.2f),
                 )
             }
@@ -2202,7 +2221,7 @@ private fun PlaylistRow(
                 color = SpotifyWhite,
             )
             Text(
-                "Playlist • ${playlist.songIds.size} songs",
+                "Playlist • ${playlist.songCount} songs",
                 style = MaterialTheme.typography.bodySmall,
                 color = SpotifyTextMuted,
             )
@@ -2242,6 +2261,7 @@ private fun PlaylistSongsDialog(
     val songsById = remember(songs) { songs.associateBy { it.id } }
     val playlistSongs = playlist.songIds.mapNotNull { songId -> songsById[songId] }
     val unavailableCount = playlist.songIds.size - playlistSongs.size
+    val hasSongCountOnly = playlist.songCount > 0 && playlist.songIds.isEmpty()
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -2249,14 +2269,20 @@ private fun PlaylistSongsDialog(
             Column {
                 Text(playlist.name, fontWeight = FontWeight.Black)
                 Text(
-                    "${playlist.songIds.size} songs",
+                    "${playlist.songCount} songs",
                     style = MaterialTheme.typography.bodySmall,
                     color = SpotifyTextMuted,
                 )
             }
         },
         text = {
-            if (playlist.songIds.isEmpty()) {
+            if (hasSongCountOnly) {
+                Text(
+                    "Playlist has songs, but song-level list is not available from current API response. Tap Add songs to manage.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = SpotifyTextMuted,
+                )
+            } else if (playlist.songIds.isEmpty()) {
                 Text(
                     "Playlist empty. Tap Add songs.",
                     style = MaterialTheme.typography.bodyMedium,

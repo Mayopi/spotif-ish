@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.musicapp.domain.model.Song
 import com.example.musicapp.domain.player.PlaybackController
+import com.example.musicapp.domain.usecase.RecordPlaybackStartedUseCase
 import com.example.musicapp.domain.usecase.SearchSongsUseCase
 import com.example.musicapp.domain.usecase.ToggleFavoriteUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -30,6 +31,7 @@ data class SearchUiState(
 class SearchViewModel @Inject constructor(
     private val searchSongsUseCase: SearchSongsUseCase,
     private val toggleFavoriteUseCase: ToggleFavoriteUseCase,
+    private val recordPlaybackStartedUseCase: RecordPlaybackStartedUseCase,
     private val playbackController: PlaybackController,
 ) : ViewModel() {
 
@@ -66,6 +68,9 @@ class SearchViewModel @Inject constructor(
     }
 
     fun playSong(song: Song, queue: List<Song>) {
-        viewModelScope.launch { playbackController.play(song, queue) }
+        viewModelScope.launch {
+            runCatching { recordPlaybackStartedUseCase(song.id) }
+            playbackController.play(song, queue)
+        }
     }
 }

@@ -10,8 +10,10 @@ import com.example.musicapp.domain.usecase.CreatePlaylistUseCase
 import com.example.musicapp.domain.usecase.DeletePlaylistUseCase
 import com.example.musicapp.domain.usecase.ObservePlaylistsUseCase
 import com.example.musicapp.domain.usecase.ObserveSongsUseCase
+import com.example.musicapp.domain.usecase.RecordPlaybackStartedUseCase
 import com.example.musicapp.domain.usecase.RemoveSongFromPlaylistUseCase
 import com.example.musicapp.domain.usecase.RenamePlaylistUseCase
+import com.example.musicapp.domain.usecase.ToggleFavoriteUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -75,6 +77,8 @@ class LibraryViewModel @Inject constructor(
     private val deletePlaylistUseCase: DeletePlaylistUseCase,
     private val addSongToPlaylistUseCase: AddSongToPlaylistUseCase,
     private val removeSongFromPlaylistUseCase: RemoveSongFromPlaylistUseCase,
+    private val toggleFavoriteUseCase: ToggleFavoriteUseCase,
+    private val recordPlaybackStartedUseCase: RecordPlaybackStartedUseCase,
     private val playbackController: PlaybackController,
 ) : ViewModel() {
 
@@ -136,7 +140,14 @@ class LibraryViewModel @Inject constructor(
 
     fun playGroup(songs: List<Song>) {
         val first = songs.firstOrNull() ?: return
-        viewModelScope.launch { playbackController.play(first, songs) }
+        viewModelScope.launch {
+            runCatching { recordPlaybackStartedUseCase(first.id) }
+            playbackController.play(first, songs)
+        }
+    }
+
+    fun toggleFavorite(songId: String) {
+        viewModelScope.launch { toggleFavoriteUseCase(songId) }
     }
 
     private fun groupByArtist(songs: List<Song>): List<ArtistGroup> =

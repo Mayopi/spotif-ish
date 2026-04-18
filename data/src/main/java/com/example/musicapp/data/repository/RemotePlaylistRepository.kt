@@ -59,7 +59,7 @@ class RemotePlaylistRepository @Inject constructor(
 
     private suspend fun reload() {
         playlists.value = withContext(dispatchersProvider.io) {
-            api.listPlaylists().map { it.toDomain() }
+            api.listPlaylists().safePlaylists.map { it.toDomain() }
         }
     }
 }

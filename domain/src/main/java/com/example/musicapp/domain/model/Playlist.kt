@@ -3,8 +3,8 @@ package com.example.musicapp.domain.model
 data class Playlist(
     val id: String,
     val name: String,
-    val songIds: List<String>,
+    val songIds: List<String> = emptyList(),
+    val songCount: Int = songIds.size,
     val createdAtEpochMillis: Long,
     val updatedAtEpochMillis: Long,
 )
-

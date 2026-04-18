@@ -4,6 +4,7 @@ import android.util.Log
 import com.example.musicapp.core.DispatchersProvider
 import com.example.musicapp.data.local.LocalMusicDataSource
 import com.example.musicapp.data.network.SpotifishApi
+import com.example.musicapp.data.network.dto.PlaybackEventRequest
 import com.example.musicapp.data.network.dto.toDomain
 import com.example.musicapp.domain.model.DriveSyncState
 import com.example.musicapp.domain.model.HomeSection
@@ -56,6 +57,7 @@ class RemoteMusicRepository @Inject constructor(
     private val scope = CoroutineScope(SupervisorJob() + dispatchersProvider.io)
     private val localSongs = MutableStateFlow<List<Song>>(emptyList())
     private val remoteSongs = MutableStateFlow<List<Song>>(emptyList())
+    private val recentlyPlayedSongs = MutableStateFlow<List<Song>>(emptyList())
     private val driveSyncState = MutableStateFlow(DriveSyncState())
     private val remoteFetchMutex = Mutex()
     private var syncPollJob: Job? = null
@@ -67,6 +69,8 @@ class RemoteMusicRepository @Inject constructor(
             // Pull whatever the backend currently knows about so the UI has data
             // before any explicit sync runs.
             runCatching { fetchRemoteLibrary() }
+            // Home recent shelf is driven by playback events.
+            runCatching { reloadRecentlyPlayed() }
         }
     }
 
@@ -84,9 +88,22 @@ class RemoteMusicRepository @Inject constructor(
     }
 
     override fun observeHomeSections(): Flow<List<HomeSection>> {
-        return observeAllSongs().map { songs ->
+        return combine(
+            observeAllSongs(),
+            recentlyPlayedSongs,
+            favoritesRepository.observeFavoriteSongIds(),
+        ) { songs, recent, favoriteSongIds ->
+            val songsById = songs.associateBy { it.id }
+            val recentSongs = recent.map { recentSong ->
+                songsById[recentSong.id] ?: recentSong
+            }
+            val favoriteSongs = favoriteSongIds.mapNotNull { favoriteId ->
+                songsById[favoriteId]
+            }
             listOf(
                 HomeSection("Recently Added", songs.sortedByDescending { it.addedAtEpochMillis }.take(12)),
+                HomeSection("Recently Played", recentSongs.take(20)),
+                HomeSection("Favorite Songs", favoriteSongs.ifEmpty { songs.filter { it.isFavorite } }.take(20)),
                 HomeSection("Local Library", songs.filter { it.sourceType == SourceType.LOCAL }.take(12)),
                 HomeSection("Drive Library", songs.filter { it.sourceType == SourceType.DRIVE }.take(12)),
                 HomeSection("All Songs", songs.take(20)),
@@ -172,6 +189,21 @@ class RemoteMusicRepository @Inject constructor(
         }
     }
 
+    override suspend fun recordPlaybackStarted(songId: String) {
+        runCatching {
+            withContext(dispatchersProvider.io) {
+                api.recordPlaybackEvent(
+                    PlaybackEventRequest(
+                        songId = songId,
+                        eventType = "started",
+                        positionMs = 0L,
+                    ),
+                )
+            }
+        }
+        runCatching { reloadRecentlyPlayed() }
+    }
+
     override suspend fun search(query: String): List<Song> {
         val normalized = query.trim()
         if (normalized.isBlank()) return observeAllSongs().map { it.take(20) }.first()
@@ -219,6 +251,15 @@ class RemoteMusicRepository @Inject constructor(
             if (collected != remoteSongs.value) {
                 remoteSongs.value = collected
             }
+        }
+    }
+
+    private suspend fun reloadRecentlyPlayed() {
+        val recent = withContext(dispatchersProvider.io) {
+            api.listRecentlyPlayed(limit = 20).safeItems.map { it.toDomain() }
+        }
+        if (recent != recentlyPlayedSongs.value) {
+            recentlyPlayedSongs.value = recent
         }
     }
 

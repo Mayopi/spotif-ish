@@ -6,6 +6,7 @@ import com.example.musicapp.domain.model.HomeSection
 import com.example.musicapp.domain.model.Song
 import com.example.musicapp.domain.player.PlaybackController
 import com.example.musicapp.domain.usecase.ObserveHomeSectionsUseCase
+import com.example.musicapp.domain.usecase.RecordPlaybackStartedUseCase
 import com.example.musicapp.domain.usecase.ToggleFavoriteUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -23,6 +24,7 @@ data class HomeUiState(
 class HomeViewModel @Inject constructor(
     observeHomeSectionsUseCase: ObserveHomeSectionsUseCase,
     private val toggleFavoriteUseCase: ToggleFavoriteUseCase,
+    private val recordPlaybackStartedUseCase: RecordPlaybackStartedUseCase,
     private val playbackController: PlaybackController,
 ) : ViewModel() {
 
@@ -35,7 +37,9 @@ class HomeViewModel @Inject constructor(
     }
 
     fun playSong(song: Song, queue: List<Song>) {
-        viewModelScope.launch { playbackController.play(song, queue) }
+        viewModelScope.launch {
+            runCatching { recordPlaybackStartedUseCase(song.id) }
+            playbackController.play(song, queue)
+        }
     }
 }
-

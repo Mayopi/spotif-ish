@@ -8,6 +8,7 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class SongDto(
     val id: String,
+    val source: String? = null,
     val title: String,
     val artist: String,
     val album: String,
@@ -37,6 +38,13 @@ data class SongPageDto(
     val nextCursor: String? = null,
 ) {
     val safeItems: List<SongDto> get() = items ?: emptyList()
+}
+
+@Serializable
+data class FavoritesResponseDto(
+    val favorites: List<SongDto>? = null,
+) {
+    val safeFavorites: List<SongDto> get() = favorites ?: emptyList()
 }
 
 @Serializable
@@ -80,7 +88,10 @@ fun SongDto.toDomain(): Song {
         albumArtUri = albumArtObjectKey
             ?.takeIf { it.isNotBlank() }
             ?.let { "${baseUrl}v1/art/$it" },
-        sourceType = SourceType.DRIVE,
+        sourceType = when (source?.lowercase()) {
+            "local" -> SourceType.LOCAL
+            else -> SourceType.DRIVE
+        },
         // Construct the backend stream URL locally since the generic song list doesn't supply it.
         playableUri = streamUrl.ifBlank { "${baseUrl}v1/songs/$id/stream" },
         mimeType = mimeType,

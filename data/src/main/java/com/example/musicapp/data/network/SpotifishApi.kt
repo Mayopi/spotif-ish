@@ -7,9 +7,12 @@ import com.example.musicapp.data.network.dto.AuthTokenPair
 import com.example.musicapp.data.network.dto.ConnectDriveRequest
 import com.example.musicapp.data.network.dto.CreatePlaylistRequest
 import com.example.musicapp.data.network.dto.DriveFolderListDto
+import com.example.musicapp.data.network.dto.FavoritesResponseDto
 import com.example.musicapp.data.network.dto.GoogleSignInRequest
 import com.example.musicapp.data.network.dto.HomeResponseDto
+import com.example.musicapp.data.network.dto.PlaybackEventRequest
 import com.example.musicapp.data.network.dto.PlaylistDto
+import com.example.musicapp.data.network.dto.PlaylistListResponseDto
 import com.example.musicapp.data.network.dto.RefreshTokenRequest
 import com.example.musicapp.data.network.dto.RefreshedTokenPair
 import com.example.musicapp.data.network.dto.RenamePlaylistRequest
@@ -108,10 +111,10 @@ interface SpotifishApi {
     // -------------------- Playlists --------------------
 
     @GET("v1/playlists")
-    suspend fun listPlaylists(): List<PlaylistDto>
+    suspend fun listPlaylists(): PlaylistListResponseDto
 
     @POST("v1/playlists")
-    suspend fun createPlaylist(@Body request: CreatePlaylistRequest)
+    suspend fun createPlaylist(@Body request: CreatePlaylistRequest): PlaylistDto
 
     @PATCH("v1/playlists/{id}")
     suspend fun renamePlaylist(
@@ -140,10 +143,18 @@ interface SpotifishApi {
         @Body request: ReorderSongsRequest,
     )
 
+    // -------------------- Playback events --------------------
+
+    @POST("v1/playback/events")
+    suspend fun recordPlaybackEvent(@Body request: PlaybackEventRequest)
+
+    @GET("v1/playback/recent")
+    suspend fun listRecentlyPlayed(@Query("limit") limit: Int = 20): SongPageDto
+
     // -------------------- Favorites --------------------
 
     @GET("v1/favorites")
-    suspend fun listFavoriteIds(): List<String>
+    suspend fun listFavorites(): FavoritesResponseDto
 
     @PUT("v1/favorites/{songId}")
     suspend fun likeSong(@Path("songId") songId: String)

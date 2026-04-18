@@ -20,6 +20,7 @@ class RemoteFavoritesRepository @Inject constructor(
 
     private val scope = CoroutineScope(SupervisorJob() + dispatchersProvider.io)
     private val favorites = MutableStateFlow<Set<String>>(emptySet())
+    private val favoriteSongIds = MutableStateFlow<List<String>>(emptyList())
 
     init {
         scope.launch { runCatching { reload() } }
@@ -27,23 +28,37 @@ class RemoteFavoritesRepository @Inject constructor(
 
     override fun observeFavorites(): Flow<Set<String>> = favorites
 
+    override fun observeFavoriteSongIds(): Flow<List<String>> = favoriteSongIds
+
     override suspend fun toggleFavorite(songId: String) {
         // Optimistic local toggle so the heart icon flips instantly. The remote call
         // is fired-and-awaited; on failure we restore the previous set.
         val current = favorites.value
+        val currentOrder = favoriteSongIds.value
         val next = if (songId in current) current - songId else current + songId
+        val nextOrder = if (songId in current) {
+            currentOrder.filterNot { it == songId }
+        } else {
+            listOf(songId) + currentOrder.filterNot { it == songId }
+        }
         favorites.value = next
+        favoriteSongIds.value = nextOrder
 
         runCatching {
             if (songId in current) api.unlikeSong(songId) else api.likeSong(songId)
+            reload()
         }.onFailure {
             favorites.value = current
+            favoriteSongIds.value = currentOrder
         }
     }
 
     private suspend fun reload() {
-        favorites.value = withContext(dispatchersProvider.io) {
-            api.listFavoriteIds().toSet()
+        val response = withContext(dispatchersProvider.io) {
+            api.listFavorites()
         }
+        val ids = response.safeFavorites.map { it.id }
+        favorites.value = ids.toSet()
+        favoriteSongIds.value = ids
     }
 }
