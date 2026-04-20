@@ -52,6 +52,7 @@ class Media3PlaybackController @Inject constructor(
     private var currentQueue = emptyList<Song>()
     private val controllerScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var positionTicker: Job? = null
+    @Volatile private var playbackServiceStarted = false
     @Volatile private var released = false
 
     private val httpDataSourceFactory: DefaultHttpDataSource.Factory =
@@ -63,7 +64,12 @@ class Media3PlaybackController @Inject constructor(
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             if (released) return
             publishState()
-            if (isPlaying) startPositionTicker() else stopPositionTicker()
+            if (isPlaying) {
+                startPlaybackServiceIfNeeded()
+                startPositionTicker()
+            } else {
+                stopPositionTicker()
+            }
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
@@ -72,6 +78,11 @@ class Media3PlaybackController @Inject constructor(
         }
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            if (released) return
+            publishState()
+        }
+
+        override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) {
             if (released) return
             publishState()
         }
@@ -120,7 +131,6 @@ class Media3PlaybackController @Inject constructor(
             exoPlayer.setMediaItems(queue.map(::toMediaItem), startIndex, 0L)
             exoPlayer.prepare()
             exoPlayer.playWhenReady = true
-            startPlaybackServiceIfNeeded()
             publishState()
         }
     }
@@ -133,10 +143,22 @@ class Media3PlaybackController @Inject constructor(
         }
     }
 
+    override suspend fun toggleShuffle() {
+        if (released) return
+        runCatching {
+            exoPlayer.shuffleModeEnabled = !exoPlayer.shuffleModeEnabled
+            publishState()
+        }
+    }
+
     override suspend fun skipNext() {
         if (released) return
         runCatching {
-            exoPlayer.seekToNextMediaItem()
+            if (exoPlayer.hasNextMediaItem()) {
+                exoPlayer.seekToNextMediaItem()
+            } else if (currentQueue.isNotEmpty()) {
+                exoPlayer.seekToDefaultPosition(0)
+            }
             publishState()
         }
     }
@@ -144,7 +166,11 @@ class Media3PlaybackController @Inject constructor(
     override suspend fun skipPrevious() {
         if (released) return
         runCatching {
-            exoPlayer.seekToPreviousMediaItem()
+            when {
+                exoPlayer.currentPosition > PREVIOUS_SEEK_RESTART_THRESHOLD_MS -> exoPlayer.seekTo(0L)
+                exoPlayer.hasPreviousMediaItem() -> exoPlayer.seekToPreviousMediaItem()
+                currentQueue.isNotEmpty() -> exoPlayer.seekToDefaultPosition(currentQueue.lastIndex)
+            }
             publishState()
         }
     }
@@ -167,11 +193,15 @@ class Media3PlaybackController @Inject constructor(
     }
 
     private fun startPlaybackServiceIfNeeded() {
+        if (playbackServiceStarted) return
         val intent = Intent(appContext, PlaybackService::class.java)
+        playbackServiceStarted = true
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            ContextCompat.startForegroundService(appContext, intent)
+            runCatching { ContextCompat.startForegroundService(appContext, intent) }
+                .onFailure { playbackServiceStarted = false }
         } else {
-            appContext.startService(intent)
+            runCatching { appContext.startService(intent) }
+                .onFailure { playbackServiceStarted = false }
         }
     }
 
@@ -212,3 +242,5 @@ class Media3PlaybackController @Inject constructor(
             .build()
     }
 }
+
+private const val PREVIOUS_SEEK_RESTART_THRESHOLD_MS = 3_000L

@@ -16,8 +16,8 @@ interface PlaybackController {
     fun observeState(): Flow<PlaybackState>
     suspend fun play(song: Song, queue: List<Song>)
     suspend fun togglePlayPause()
+    suspend fun toggleShuffle()
     suspend fun skipNext()
     suspend fun skipPrevious()
     suspend fun seekTo(positionMs: Long)
 }
-

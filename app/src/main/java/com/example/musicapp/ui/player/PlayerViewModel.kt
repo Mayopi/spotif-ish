@@ -24,6 +24,7 @@ data class PlayerUiState(
     val queueSize: Int = 0,
     val positionMs: Long = 0L,
     val durationMs: Long = 0L,
+    val shuffleEnabled: Boolean = false,
     val isCurrentSongFavorite: Boolean = false,
 ) {
     val hasSong: Boolean get() = currentSong != null
@@ -53,6 +54,7 @@ class PlayerViewModel @Inject constructor(
                 queueSize = state.queue.items.size,
                 positionMs = state.positionMs,
                 durationMs = state.durationMs,
+                shuffleEnabled = state.queue.shuffleEnabled,
                 isCurrentSongFavorite = song?.id?.let { it in favorites } == true,
             )
         }
@@ -60,6 +62,10 @@ class PlayerViewModel @Inject constructor(
 
     fun togglePlayPause() {
         viewModelScope.launch { playbackController.togglePlayPause() }
+    }
+
+    fun toggleShuffle() {
+        viewModelScope.launch { playbackController.toggleShuffle() }
     }
 
     fun skipNext() {

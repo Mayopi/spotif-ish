@@ -352,6 +352,7 @@ private fun PlayerRoute(
     PlayerScreen(
         state = playerState,
         onToggleFavorite = playerViewModel::toggleCurrentSongFavorite,
+        onToggleShuffle = playerViewModel::toggleShuffle,
         onTogglePlayPause = playerViewModel::togglePlayPause,
         onNext = playerViewModel::skipNext,
         onPrevious = playerViewModel::skipPrevious,
@@ -1521,6 +1522,7 @@ private fun AlbumRow(
 private fun PlayerScreen(
     state: PlayerUiState,
     onToggleFavorite: () -> Unit,
+    onToggleShuffle: () -> Unit,
     onTogglePlayPause: () -> Unit,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
@@ -1679,17 +1681,25 @@ private fun PlayerScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(
-                    imageVector = Icons.Default.Shuffle,
-                    contentDescription = "Shuffle",
-                    tint = SpotifyGreen,
-                    modifier = Modifier.size(24.dp),
-                )
-                IconButton(onClick = onPrevious) {
+                IconButton(
+                    onClick = onToggleShuffle,
+                    enabled = state.queueSize > 1,
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Shuffle,
+                        contentDescription = "Shuffle",
+                        tint = if (state.shuffleEnabled) SpotifyGreen else SpotifyTextMuted,
+                        modifier = Modifier.size(24.dp),
+                    )
+                }
+                IconButton(
+                    onClick = onPrevious,
+                    enabled = state.currentSong != null,
+                ) {
                     Icon(
                         imageVector = Icons.Default.SkipPrevious,
                         contentDescription = "Previous",
-                        tint = SpotifyWhite,
+                        tint = if (state.currentSong != null) SpotifyWhite else SpotifyTextMuted,
                         modifier = Modifier.size(44.dp),
                     )
                 }
@@ -1708,11 +1718,14 @@ private fun PlayerScreen(
                         modifier = Modifier.size(36.dp),
                     )
                 }
-                IconButton(onClick = onNext) {
+                IconButton(
+                    onClick = onNext,
+                    enabled = state.currentSong != null,
+                ) {
                     Icon(
                         imageVector = Icons.Default.SkipNext,
                         contentDescription = "Next",
-                        tint = SpotifyWhite,
+                        tint = if (state.currentSong != null) SpotifyWhite else SpotifyTextMuted,
                         modifier = Modifier.size(44.dp),
                     )
                 }
