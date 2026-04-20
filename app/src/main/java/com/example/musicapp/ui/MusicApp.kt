@@ -1071,30 +1071,97 @@ private fun LibraryScreen(
     }
 
     if (showCreateDialog) {
+        val normalizedDraft = createNameDraft.trim()
         AlertDialog(
             onDismissRequest = { showCreateDialog = false },
-            title = { Text("Create playlist") },
+            containerColor = SpotifyCard,
+            shape = RoundedCornerShape(24.dp),
+            title = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(CircleShape)
+                            .background(Brush.linearGradient(listOf(SpotifyGreen, Color(0xFF1F4D3A)))),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = null,
+                            tint = SpotifyBackground,
+                        )
+                    }
+                    Text(
+                        "Create playlist",
+                        color = SpotifyWhite,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Black,
+                    )
+                    Text(
+                        "Pick a name you can recognize fast.",
+                        color = SpotifyTextMuted,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            },
             text = {
-                OutlinedTextField(
-                    value = createNameDraft,
-                    onValueChange = { createNameDraft = it },
-                    singleLine = true,
-                    label = { Text("Playlist name") },
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = createNameDraft,
+                        onValueChange = { value ->
+                            if (value.length <= 60) createNameDraft = value
+                        },
+                        singleLine = true,
+                        label = { Text("Playlist name") },
+                        placeholder = { Text("Late night drive mix") },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = SpotifyGreen,
+                            focusedLabelColor = SpotifyGreen,
+                            unfocusedLabelColor = SpotifyTextMuted,
+                            focusedContainerColor = SpotifyBackground.copy(alpha = 0.35f),
+                            unfocusedContainerColor = SpotifyBackground.copy(alpha = 0.2f),
+                            focusedTextColor = SpotifyWhite,
+                            unfocusedTextColor = SpotifyWhite,
+                            cursorColor = SpotifyGreen,
+                        ),
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            "Use descriptive name",
+                            color = SpotifyTextMuted,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                        Text(
+                            "${normalizedDraft.length}/60",
+                            color = SpotifyTextMuted,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                }
             },
             confirmButton = {
-                TextButton(
+                Button(
                     onClick = {
                         onCreatePlaylist(createNameDraft)
                         showCreateDialog = false
                     },
-                    enabled = createNameDraft.isNotBlank(),
+                    enabled = normalizedDraft.isNotBlank(),
+                    shape = RoundedCornerShape(999.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = SpotifyGreen,
+                        contentColor = SpotifyBackground,
+                    ),
                 ) {
-                    Text("Create")
+                    Text("Create playlist", fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showCreateDialog = false }) { Text("Cancel") }
+                TextButton(onClick = { showCreateDialog = false }) {
+                    Text("Cancel", color = SpotifyWhite)
+                }
             },
         )
     }
@@ -2104,84 +2171,144 @@ private fun FolderPickerDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = SpotifyCard,
+        shape = RoundedCornerShape(24.dp),
         title = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Choose Drive Folder", color = SpotifyWhite, fontWeight = FontWeight.Black)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    "Choose Drive folder",
+                    color = SpotifyWhite,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Black,
+                )
+                Text(
+                    "Browse folders, then confirm current path.",
+                    color = SpotifyTextMuted,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = SpotifyBackground.copy(alpha = 0.45f)),
+                    shape = RoundedCornerShape(12.dp),
                 ) {
-                    Text(
-                        state.currentDriveFolderPath,
-                        modifier = Modifier.weight(1f),
-                        color = SpotifyTextMuted,
-                        style = MaterialTheme.typography.bodySmall,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    if (state.canNavigateUpFolders) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Text(
-                            "Back",
-                            modifier = Modifier.clickable(
-                                enabled = !state.isFolderLoading,
-                                onClick = onNavigateUp,
-                            ),
+                            state.currentDriveFolderPath,
+                            modifier = Modifier.weight(1f),
                             color = SpotifyWhite,
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
                         )
+                        if (state.canNavigateUpFolders) {
+                            Text(
+                                "Back",
+                                modifier = Modifier.clickable(
+                                    enabled = !state.isFolderLoading,
+                                    onClick = onNavigateUp,
+                                ),
+                                color = SpotifyGreen,
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
                     }
                 }
             }
         },
         text = {
             if (state.isFolderLoading && state.availableDriveFolders.isEmpty()) {
-                Text(
-                    "Loading folders...",
-                    color = SpotifyTextMuted,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        color = SpotifyGreen,
+                        strokeWidth = 2.dp,
+                    )
+                    Text(
+                        "Loading folders...",
+                        color = SpotifyTextMuted,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
             } else if (state.availableDriveFolders.isEmpty()) {
-                Text(
-                    "This folder has no subfolders. You can use the current folder.",
-                    color = SpotifyTextMuted,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = SpotifyBackground.copy(alpha = 0.35f)),
+                    shape = RoundedCornerShape(12.dp),
+                ) {
+                    Text(
+                        "No subfolders here. You can use current path.",
+                        modifier = Modifier.padding(12.dp),
+                        color = SpotifyTextMuted,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
             } else {
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(state.availableDriveFolders) { folder ->
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable(enabled = !state.isFolderLoading) { onOpenFolder(folder) },
-                            colors = CardDefaults.cardColors(containerColor = SpotifyBackground),
-                            shape = RoundedCornerShape(12.dp),
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically,
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Subfolders",
+                        color = SpotifyWhite,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    LazyColumn(
+                        modifier = Modifier.heightIn(max = 300.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        items(state.availableDriveFolders) { folder ->
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable(enabled = !state.isFolderLoading) { onOpenFolder(folder) },
+                                colors = CardDefaults.cardColors(
+                                    containerColor = SpotifyBackground.copy(alpha = 0.55f),
+                                ),
+                                shape = RoundedCornerShape(14.dp),
                             ) {
-                                Column(
-                                    modifier = Modifier.weight(1f),
-                                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    Text(folder.name, color = SpotifyWhite, fontWeight = FontWeight.SemiBold)
-                                    Text(
-                                        folder.path,
-                                        color = SpotifyTextMuted,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
+                                    Column(
+                                        modifier = Modifier.weight(1f),
+                                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                                    ) {
+                                        Text(
+                                            folder.name,
+                                            color = SpotifyWhite,
+                                            fontWeight = FontWeight.SemiBold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                        Text(
+                                            folder.path,
+                                            color = SpotifyTextMuted,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(999.dp))
+                                            .background(SpotifyGreen.copy(alpha = 0.18f))
+                                            .padding(horizontal = 10.dp, vertical = 5.dp),
+                                    ) {
+                                        Text(
+                                            "Open",
+                                            color = SpotifyGreen,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.Bold,
+                                        )
+                                    }
                                 }
-                                Text(
-                                    "Open",
-                                    color = SpotifyWhite,
-                                    style = MaterialTheme.typography.labelLarge,
-                                    fontWeight = FontWeight.Bold,
-                                )
                             }
                         }
                     }
@@ -2192,23 +2319,18 @@ private fun FolderPickerDialog(
             Button(
                 onClick = onSelectCurrentFolder,
                 enabled = !state.isFolderLoading,
+                shape = RoundedCornerShape(999.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = SpotifyGreen,
                     contentColor = SpotifyBackground,
-                ),
+                )
             ) {
-                Text("Use This Folder")
+                Text("Use current folder", fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {
-            Button(
-                onClick = onDismiss,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = SpotifyMuted.copy(alpha = 0.35f),
-                    contentColor = SpotifyWhite,
-                ),
-            ) {
-                Text("Close")
+            TextButton(onClick = onDismiss) {
+                Text("Cancel", color = SpotifyWhite)
             }
         },
     )
