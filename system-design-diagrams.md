@@ -536,7 +536,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    ROOT[com.example.musicapp]
+    ROOT[com.example.spotifish]
 
     ROOT --> PRESENTATION[presentation]
     ROOT --> DOMAIN[domain]

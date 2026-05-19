@@ -3,7 +3,7 @@
 ## Current Structure
 UI implementation currently lives mostly in one large file:
 
-- `app/src/main/java/com/example/musicapp/ui/MusicApp.kt` (~2000 lines)
+- `app/src/main/java/com/example/spotifish/ui/SpotifishApp.kt` (~2000 lines)
 
 Sections are grouped by screen and shared components:
 
@@ -56,7 +56,7 @@ Rules:
 - Use deterministic visual helpers (`gradientForSong`) for stable UI identity.
 
 ## File Organization Rule (Important)
-Current monolithic `MusicApp.kt` is functional but hard to scale.
+Current monolithic `SpotifishApp.kt` is functional but hard to scale.
 
 Target split structure:
 
@@ -85,6 +85,6 @@ Don’t:
 ## Best-Practice Upgrades
 Recommended next improvements:
 
-1. Split `MusicApp.kt` by feature without changing behavior.
+1. Split `SpotifishApp.kt` by feature without changing behavior.
 2. Add Compose previews for each screen and key row component.
 3. Add UI tests for bottom navigation, mini-player visibility, and settings dialog flows.

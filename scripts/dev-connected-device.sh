@@ -4,7 +4,7 @@ set -euo pipefail
 
 SERIAL="${1:-}"
 APP_ID="com.example.spotifish"
-ACTIVITY="com.example.spotifish/com.example.musicapp.MainActivity"
+ACTIVITY="com.example.spotifish/com.example.spotifish.MainActivity"
 
 if ! command -v adb >/dev/null 2>&1; then
   echo "adb is not installed or not on PATH."

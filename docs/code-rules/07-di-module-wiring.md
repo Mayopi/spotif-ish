@@ -5,7 +5,7 @@ Project uses Hilt across modules.
 
 Main entry points:
 
-- `@HiltAndroidApp`: `MusicApplication`
+- `@HiltAndroidApp`: `SpotifishApplication`
 - `@AndroidEntryPoint`: `MainActivity`, `PlaybackService`
 - `@HiltViewModel`: all ViewModels
 

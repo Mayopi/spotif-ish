@@ -58,6 +58,6 @@ Don’t:
 ## Best-Practice Upgrades
 Recommended next improvements:
 
-1. Split giant `MusicApp.kt` into feature files (`home`, `search`, `library`, `player`, `settings`) while preserving same dependency boundaries.
+1. Split giant `SpotifishApp.kt` into feature files (`home`, `search`, `library`, `player`, `settings`) while preserving same dependency boundaries.
 2. Move remaining direct API calls in `SettingsViewModel` behind a domain/data repository contract for stricter layering consistency.
 3. Add architecture tests or lint checks to detect forbidden module imports.

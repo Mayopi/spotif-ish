@@ -21,7 +21,7 @@ fun loadEnv(): Map<String, String> {
 val env = loadEnv()
 
 android {
-    namespace = "com.example.musicapp.data"
+    namespace = "com.example.spotifish.data"
     compileSdk = 35
 
     defaultConfig {

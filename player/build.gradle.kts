@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.musicapp.player"
+    namespace = "com.example.spotifish.player"
     compileSdk = 35
 
     defaultConfig {
